@@ -34,31 +34,30 @@ def compute_disparity_map(rect_img1, rect_img2, min_disparity=0, num_disparities
     disp_map = stereo.compute(rect_img1, rect_img2).astype(np.float32) / 16.0
     return disp_map
 
-def generate_point_cloud(disp_map, Q, color_image=None, max_z = None):
-    # Avoid division by zero
-    disp_map[disp_map == 0] = 0.1
-    disp_map[disp_map == -1] = 0.1
-
-    points_3D = cv2.reprojectImageTo3D(disp_map, Q)
-    
-    # Also, ensure that disparity values are valid (greater than zero)
+def generate_point_cloud(disp_map, Q, color_image=None, max_z=None):
+    # Create a mask where disparity is greater than 0
     valid_disp = disp_map > 0
 
+    # Reproject to 3D using the valid disparity mask
+    points_3D = cv2.reprojectImageTo3D(disp_map, Q)
+
+    # Apply max_z filtering if needed
     if max_z is not None:
-        # Create a mask where Z-values are less than or equal to max_z
-        mask = points_3D[..., 2] <= max_z
+        depth_mask = points_3D[..., 2] <= max_z
+        valid_mask = np.logical_and(valid_disp, depth_mask)
+    else:
+        valid_mask = valid_disp
 
-    # Combine the masks
-    final_mask = np.logical_and(mask, valid_disp)
+    # Extract valid points and colors
+    points = points_3D[valid_mask]
 
-    points = points_3D[final_mask]
-
-    # If a color image is provided, apply the mask to get colors for each point
     if color_image is not None:
-        colors = color_image[final_mask]
+        colors = color_image[valid_mask]
         return points, colors
     else:
         return points
+
+
 
 # Save to a PLY file
 def save_point_cloud_to_ply(filename, points):
@@ -115,6 +114,9 @@ def calculate_q_matrix(P_left, P_right):
 
     # Calculate baseline from P_right
     Tx = -P_right[0, 3] / fx  # Baseline distance (assuming P_right[0, 3] is non-zero)
+    if Tx == 0:
+        raise ValueError("Baseline (Tx) is zero. Check P_right[0, 3] and fx.")
+
 
     # Construct the Q matrix based on the revised stereo geometry
     Q = np.array([
@@ -125,6 +127,65 @@ def calculate_q_matrix(P_left, P_right):
     ])
 
     return Q
+
+def extract_bbox_from_txt(file_path, min_confidence=0.5):
+    """
+    Extracts bounding boxes from a .txt file with a confidence threshold.
+
+    Args:
+        file_path (str): Path to the .txt file containing detection data.
+        min_confidence (float): Minimum confidence score for including a bounding box.
+
+    Returns:
+        dict: A dictionary with keys:
+              - "bbox" : A list of 2D bounding boxes defined as [x_min, y_min, x_max, y_max].
+              - "confidence": A list of confidence scores for each bounding box.
+              - "class": A list of classes corresponding to each bounding box.
+    """
+    bounding_boxes = {"bbox": [], "confidence": [], "class": []}
+
+    with open(file_path, "r") as file:
+        for line in file:
+            parts = line.strip().split(",")
+            obj_class = parts[0].strip()
+            confidence = float(parts[1])
+            x1, y1, x2, y2 = map(int, parts[2:])
+
+            # Apply confidence threshold
+            if confidence >= min_confidence:
+                bounding_boxes["bbox"].append([x1, y1, x2, y2])
+                bounding_boxes["confidence"].append(confidence)
+                bounding_boxes["class"].append(obj_class)
+
+    return bounding_boxes
+
+
+def create_bbox_mask(image_shape, bounding_boxes):
+    """
+    Creates a boolean mask with the same shape as the image, where pixels inside any of the bounding boxes are True.
+
+    Args:
+        image_shape (tuple): Shape of the image (height, width).
+        bounding_boxes (list): List of bounding boxes, each defined as [x_min, y_min, x_max, y_max].
+
+    Returns:
+        np.ndarray: Boolean mask where True indicates pixels inside the bounding boxes.
+    """
+    mask = np.zeros(image_shape[:2], dtype=bool)  # Assuming the image is grayscale or RGB
+
+    for bbox in bounding_boxes:
+        x_min, y_min, x_max, y_max = bbox
+
+        # Ensure coordinates are within image bounds
+        x_min = max(0, x_min)
+        y_min = max(0, y_min)
+        x_max = min(image_shape[1] - 1, x_max)
+        y_max = min(image_shape[0] - 1, y_max)
+
+        mask[y_min:y_max+1, x_min:x_max+1] = True
+
+    return mask
+
 
 def visualize_point_cloud(points, colors=None):
     """
@@ -147,19 +208,36 @@ def visualize_point_cloud(points, colors=None):
     # Visualize the point cloud with all points, including any invalid depths
     o3d.visualization.draw_geometries([point_cloud], window_name="3D Point Cloud Visualization (All Points)")
 
-
-def RectImg2PC(rect_img1, rect_img2, P_left, P_right, color_img=None):
-    # calculate Q-matrix
+def RectImg2PC(rect_img1, rect_img2, P_left, P_right, color_img=None, bbox_mask=None):
+    # Calculate Q-matrix
     Q = calculate_q_matrix(P_left, P_right)
 
     # Compute disparity map
-    disp_map = compute_disparity_map(rect_img1, rect_img2,min_disparity=0, num_disparities=6*16, block_size=2)
+    disp_map = compute_disparity_map(rect_img1, rect_img2, min_disparity=0, num_disparities=6*16, block_size=2)
+
+    # Apply bounding box mask to disparity map if provided
+    if bbox_mask is not None:
+        # Ensure that the mask has the same dimensions as the disparity map
+        if bbox_mask.shape != disp_map.shape:
+            raise ValueError("Bounding box mask shape does not match disparity map shape.")
+        # Set disparities outside the bounding boxes to NaN or zero
+        disp_map = np.where(bbox_mask, disp_map, np.nan)
+
+    # Generate point cloud data
     if color_img is not None:
-        point_cloud, colors = generate_point_cloud(disp_map, Q, color_image=color_img, max_z=20)
-        point_cloud.colors = o3d.utility.Vector3dVector(colors / 255.0)
-        return point_cloud
+        points, colors = generate_point_cloud(disp_map, Q, color_image=color_img, max_z=20)
     else:
-        point_cloud = generate_point_cloud(disp_map, Q, color_image=None, max_z=20)
-        return point_cloud
+        points = generate_point_cloud(disp_map, Q, color_image=None, max_z=20)
+        colors = None  # No color information
+
+    # Create Open3D PointCloud object
+    point_cloud = o3d.geometry.PointCloud()
+    point_cloud.points = o3d.utility.Vector3dVector(points)
+
+    # Assign colors if available
+    if colors is not None:
+        point_cloud.colors = o3d.utility.Vector3dVector(colors / 255.0)
+
+    return point_cloud
 
 
