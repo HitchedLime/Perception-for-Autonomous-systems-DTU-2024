@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import open3d as o3d
 
 
 def compute_disparity_map(rect_img1, rect_img2, min_disparity=0, num_disparities=5*16, block_size=6):
@@ -124,4 +125,40 @@ def calculate_q_matrix(P_left, P_right):
     ])
 
     return Q
+
+def visualize_point_cloud(points, colors=None):
+    """
+    Visualize a 3D point cloud with optional RGB colors using Open3D.
+    
+    Parameters:
+    - points: (N, 3) numpy array of 3D points.
+    - colors: (N, 3) numpy array of RGB colors corresponding to each point, with values in [0, 255].
+    """
+    # Create an Open3D PointCloud object
+    point_cloud = o3d.geometry.PointCloud()
+
+    # Assign points directly to the point cloud
+    point_cloud.points = o3d.utility.Vector3dVector(points)
+    
+    # Normalize colors to [0, 1] and assign if available
+    if colors is not None:
+        point_cloud.colors = o3d.utility.Vector3dVector(colors / 255.0)
+
+    # Visualize the point cloud with all points, including any invalid depths
+    o3d.visualization.draw_geometries([point_cloud], window_name="3D Point Cloud Visualization (All Points)")
+
+
+def RectImg2PC(rect_img1, rect_img2, P_left, P_right, color_img=None):
+    # calculate Q-matrix
+    Q = calculate_q_matrix(P_left, P_right)
+
+    # Compute disparity map
+    disp_map = compute_disparity_map(rect_img1, rect_img2,min_disparity=0, num_disparities=6*16, block_size=2)
+    if color_img is not None:
+        point_cloud, colors = generate_point_cloud(disp_map, Q, color_image=color_img, max_z=20)
+        return point_cloud, colors
+    else:
+        point_cloud = generate_point_cloud(disp_map, Q, color_image=None, max_z=20)
+        return point_cloud
+
 
