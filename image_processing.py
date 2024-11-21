@@ -156,7 +156,8 @@ def RectImg2PC(rect_img1, rect_img2, P_left, P_right, color_img=None):
     disp_map = compute_disparity_map(rect_img1, rect_img2,min_disparity=0, num_disparities=6*16, block_size=2)
     if color_img is not None:
         point_cloud, colors = generate_point_cloud(disp_map, Q, color_image=color_img, max_z=20)
-        return point_cloud, colors
+        point_cloud.colors = o3d.utility.Vector3dVector(colors / 255.0)
+        return point_cloud
     else:
         point_cloud = generate_point_cloud(disp_map, Q, color_image=None, max_z=20)
         return point_cloud
