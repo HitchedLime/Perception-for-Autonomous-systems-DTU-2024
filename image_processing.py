@@ -57,21 +57,6 @@ def generate_point_cloud(disp_map, Q, color_image=None, max_z=None):
     else:
         return points
 
-
-
-# Save to a PLY file
-def save_point_cloud_to_ply(filename, points):
-    with open(filename, 'w') as f:
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write(f"element vertex {len(points)}\n")
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        f.write("end_header\n")
-        for point in points:
-            f.write(f"{point[0]} {point[1]} {point[2]}\n")
-
 def parse_calibration_data(file_path):
     calibration = {}
     with open(file_path, 'r') as file:
