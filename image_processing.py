@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import open3d as o3d
-
+import json
 
 def compute_disparity_map(rect_img1, rect_img2, min_disparity=0, num_disparities=5*16, block_size=6):
     """
@@ -160,6 +160,28 @@ def extract_bbox_from_txt(file_path, min_confidence=0.5):
     return bounding_boxes
 
 
+def visualize_point_cloud(points, colors=None):
+    """
+    Visualize a 3D point cloud with optional RGB colors using Open3D.
+    
+    Parameters:
+    - points: (N, 3) numpy array of 3D points.
+    - colors: (N, 3) numpy array of RGB colors corresponding to each point, with values in [0, 255].
+    """
+    # Create an Open3D PointCloud object
+    point_cloud = o3d.geometry.PointCloud()
+
+    # Assign points directly to the point cloud
+    point_cloud.points = o3d.utility.Vector3dVector(points)
+    
+    # Normalize colors to [0, 1] and assign if available
+    if colors is not None:
+        point_cloud.colors = o3d.utility.Vector3dVector(colors / 255.0)
+
+    # Visualize the point cloud with all points, including any invalid depths
+    o3d.visualization.draw_geometries([point_cloud], window_name="3D Point Cloud Visualization (All Points)")
+
+
 def create_bbox_mask(image_shape, bounding_boxes):
     """
     Creates a boolean mask with the same shape as the image, where pixels inside any of the bounding boxes are True.
@@ -186,48 +208,70 @@ def create_bbox_mask(image_shape, bounding_boxes):
 
     return mask
 
-
-def visualize_point_cloud(points, colors=None):
+def create_seg_mask(file_path, image_shape, target_class_labels=None):
     """
-    Visualize a 3D point cloud with optional RGB colors using Open3D.
-    
-    Parameters:
-    - points: (N, 3) numpy array of 3D points.
-    - colors: (N, 3) numpy array of RGB colors corresponding to each point, with values in [0, 255].
+    Creates a boolean mask from segmentation data in a .json file.
+
+    Args:
+        file_path (str): Path to the .json file containing segmentation data.
+        image_shape (tuple): Shape of the image (height, width).
+        target_class_labels (list or set): Class labels to include in the mask. If None, include all classes.
+
+    Returns:
+        np.ndarray: Boolean mask where True indicates pixels belonging to the target classes.
     """
-    # Create an Open3D PointCloud object
-    point_cloud = o3d.geometry.PointCloud()
+    # Initialize mask with False (background)
+    mask = np.zeros(image_shape[:2], dtype=bool)  # Assuming the image is grayscale or RGB
 
-    # Assign points directly to the point cloud
-    point_cloud.points = o3d.utility.Vector3dVector(points)
-    
-    # Normalize colors to [0, 1] and assign if available
-    if colors is not None:
-        point_cloud.colors = o3d.utility.Vector3dVector(colors / 255.0)
+    # Load segmentation data from JSON file
+    with open(file_path, 'r') as f:
+        segmentation_data = json.load(f)
 
-    # Visualize the point cloud with all points, including any invalid depths
-    o3d.visualization.draw_geometries([point_cloud], window_name="3D Point Cloud Visualization (All Points)")
+    # Iterate over each segmentation item (object) in the data
+    for segment in segmentation_data:
+        class_label = segment['class_label']
+        points = segment['points']  # List of [x, y] coordinates
 
-def RectImg2PC(rect_img1, rect_img2, P_left, P_right, color_img=None, bbox_mask=None):
+        # Check if the class label is in the target classes
+        if target_class_labels is None or class_label in target_class_labels:
+            # Extract x and y coordinates
+            points_array = np.array(points)
+            x_coords = points_array[:, 0]
+            y_coords = points_array[:, 1]
+
+            # Ensure coordinates are within image bounds
+            valid_mask = (x_coords >= 0) & (x_coords < image_shape[1]) & \
+                         (y_coords >= 0) & (y_coords < image_shape[0])
+
+            x_coords = x_coords[valid_mask].astype(int)
+            y_coords = y_coords[valid_mask].astype(int)
+
+            # Set the mask for these points
+            mask[y_coords, x_coords] = True  # Note: y corresponds to row index, x to column index
+
+    return mask
+
+
+def RectImg2PC(rect_img1, rect_img2, P_left, P_right, max_z=20, color_img=None, mask=None):
     # Calculate Q-matrix
     Q = calculate_q_matrix(P_left, P_right)
 
     # Compute disparity map
     disp_map = compute_disparity_map(rect_img1, rect_img2, min_disparity=0, num_disparities=6*16, block_size=2)
 
-    # Apply bounding box mask to disparity map if provided
-    if bbox_mask is not None:
+    # Apply mask to disparity map if provided
+    if mask is not None:
         # Ensure that the mask has the same dimensions as the disparity map
-        if bbox_mask.shape != disp_map.shape:
-            raise ValueError("Bounding box mask shape does not match disparity map shape.")
-        # Set disparities outside the bounding boxes to NaN or zero
-        disp_map = np.where(bbox_mask, disp_map, np.nan)
+        if mask.shape != disp_map.shape:
+            raise ValueError("Mask shape does not match disparity map shape.")
+        # Set disparities outside the mask to NaN or zero
+        disp_map = np.where(mask, disp_map, np.nan)
 
     # Generate point cloud data
     if color_img is not None:
-        points, colors = generate_point_cloud(disp_map, Q, color_image=color_img, max_z=20)
+        points, colors = generate_point_cloud(disp_map, Q, color_image=color_img, max_z=max_z)
     else:
-        points = generate_point_cloud(disp_map, Q, color_image=None, max_z=20)
+        points = generate_point_cloud(disp_map, Q, color_image=None, max_z=max_z)
         colors = None  # No color information
 
     # Create Open3D PointCloud object
