@@ -1,0 +1,34 @@
+
+path: audi
+train: /images/train # train images (relative to 'path') 128 images
+val: /images/val # val images (relative to 'path') 128 images
+
+
+names:
+  0: Car 1
+  1: Car 2
+  2: Car 3
+  3: Car 4
+  4: Bicycle 1
+  5: Bicycle 2
+  6: Bicycle 3
+  7: Bicycle 4
+  8: Pedestrian 1
+  9: Pedestrian 2
+  10: Pedestrian 3
+  11: Truck 1
+  12: Truck 2
+  13: Truck 3
+  14: Small vehicles 1
+  15: Small vehicles 2
+  16: Small vehicles 3
+  17: Traffic signal 1
+  18: Traffic signal 2
+  19: Traffic signal 3
+  20: Traffic sign 1
+  21: Traffic sign 2
+  22: Traffic sign 3
+  23: Utility vehicle 1
+  24: Utility vehicle 2
+  25: Tractor
+  26: Ego car
