@@ -30,6 +30,7 @@ def compute_disparity_map(rect_img1, rect_img2, min_disparity=0, num_disparities
         speckleRange=32
     )
 
+
     # Compute the disparity map
     disp_map = stereo.compute(rect_img1, rect_img2).astype(np.float32) / 16.0
     return disp_map
@@ -211,7 +212,7 @@ def create_seg_mask(file_path, image_shape, target_class_labels=None):
     # Load segmentation data from JSON file
     with open(file_path, 'r') as f:
         segmentation_data = json.load(f)
-
+    print(len(segmentation_data))
     # Iterate over each segmentation item (object) in the data
     for segment in segmentation_data:
         class_label = segment['class_label']
@@ -236,13 +237,51 @@ def create_seg_mask(file_path, image_shape, target_class_labels=None):
 
     return mask
 
+def create_seg_mask_with_mapping(file_path, image_shape, target_class_labels=None):
+    """
+    Creates a boolean mask from segmentation data in a .json file and maps detections to pixel indices.
+    
+    Returns:
+        mask: Boolean mask.
+        detection_map: Mapping of detection IDs to pixel coordinates.
+        detection_labels: List of class labels corresponding to each detection.
+    """
+    mask = np.zeros(image_shape[:2], dtype=bool)  # Assuming the image is grayscale or RGB
+    detection_map = {}  # Map from detection ID to pixel indices
+    detection_labels = []  # List of detection labels
+
+    with open(file_path, 'r') as f:
+        segmentation_data = json.load(f)
+
+    for idx, segment in enumerate(segmentation_data):
+        class_label = segment['class_label']
+        points = segment['points']  # List of [x, y] coordinates
+
+        if target_class_labels is None or class_label in target_class_labels:
+            points_array = np.array(points)
+            x_coords = points_array[:, 0]
+            y_coords = points_array[:, 1]
+
+            valid_mask = (x_coords >= 0) & (x_coords < image_shape[1]) & \
+                         (y_coords >= 0) & (y_coords < image_shape[0])
+
+            x_coords = x_coords[valid_mask].astype(int)
+            y_coords = y_coords[valid_mask].astype(int)
+
+            mask[y_coords, x_coords] = True
+            detection_map[idx] = (y_coords, x_coords)
+            detection_labels.append(class_label)  # Store the class label for this detection
+
+    return mask, detection_map, detection_labels
 
 def RectImg2PC(rect_img1, rect_img2, P_left, P_right, max_z=20, color_img=None, mask=None):
     # Calculate Q-matrix
     Q = calculate_q_matrix(P_left, P_right)
 
     # Compute disparity map
-    disp_map = compute_disparity_map(rect_img1, rect_img2, min_disparity=0, num_disparities=6*16, block_size=2)
+    disp_map = compute_disparity_map(rect_img1, rect_img2, num_disparities=10 * 16, block_size=7)
+    
+
 
     # Apply mask to disparity map if provided
     if mask is not None:
@@ -269,4 +308,73 @@ def RectImg2PC(rect_img1, rect_img2, P_left, P_right, max_z=20, color_img=None, 
 
     return point_cloud
 
+def RectImg2PC_for_clustering(rect_img1, rect_img2, P_left, P_right, max_z=20, mask=None, detection_map=None, detection_labels=None):
+    """
+    Generate a point cloud from stereo images and attach detection labels.
+    
+    Args:
+        rect_img1: Left rectified grayscale image.
+        rect_img2: Right rectified grayscale image.
+        P_left: Left projection matrix.
+        P_right: Right projection matrix.
+        max_z: Maximum depth (Z-coordinate) for filtering points.
+        mask: Binary mask for valid pixels (optional).
+        detection_map: Map of detection IDs to pixel indices.
+        detection_labels: List of detection labels corresponding to each detection ID.
+
+    Returns:
+        point_cloud: Open3D PointCloud object with points and colors.
+        labels: NumPy array of detection labels for each point in the point cloud.
+    """
+    # Calculate Q-matrix
+    Q = calculate_q_matrix(P_left, P_right)
+
+    # Compute disparity map
+    disp_map = compute_disparity_map(rect_img1, rect_img2, min_disparity=0, num_disparities=6 * 16, block_size=2)
+    disp_visual = (disp_map - disp_map.min()) / (disp_map.max() - disp_map.min()) * 255
+    cv2.imwrite("debug_disparity.png", disp_visual.astype(np.uint8))
+    # Apply mask to disparity map if provided
+    if mask is not None:
+        if mask.shape != disp_map.shape:
+            raise ValueError("Mask shape does not match disparity map shape.")
+        disp_map = np.where(mask, disp_map, np.nan)
+
+    # Create a valid mask for disparity and depth filtering
+    valid_disp = disp_map > 0  # Disparity must be positive
+    if max_z is not None:
+        points_3D = cv2.reprojectImageTo3D(disp_map, Q)
+        depth_mask = points_3D[..., 2] <= max_z
+        valid_disp = np.logical_and(valid_disp, depth_mask)
+
+    # Reproject to 3D and filter points
+    points_3D = cv2.reprojectImageTo3D(disp_map, Q)
+    points = points_3D[valid_disp]
+
+    # Initialize colors and labels array
+    colors = np.zeros((points.shape[0], 3))  # Default: all black
+    labels = np.full(points.shape[0], -1, dtype=int)  # Initialize with -1 (no label)
+
+    if detection_map is not None and detection_labels is not None:
+        unique_colors = np.random.rand(len(detection_map), 3)  # Generate random colors for detections
+
+        # Assign colors and labels based on detection_map
+        for detection_id, (y_coords, x_coords) in detection_map.items():
+            detection_mask = np.zeros(disp_map.shape, dtype=bool)
+            detection_mask[y_coords, x_coords] = True
+
+            # Filter detection_mask to match valid 3D points
+            valid_detection_mask = detection_mask[valid_disp]
+
+            # Assign colors and labels for the current detection
+            colors[valid_detection_mask] = unique_colors[detection_id]
+            labels[valid_detection_mask] = detection_labels[detection_id]
+
+    # Create Open3D PointCloud object
+    point_cloud = o3d.geometry.PointCloud()
+    point_cloud.points = o3d.utility.Vector3dVector(points)
+
+    # Assign colors
+    point_cloud.colors = o3d.utility.Vector3dVector(colors)
+
+    return point_cloud, labels
 
