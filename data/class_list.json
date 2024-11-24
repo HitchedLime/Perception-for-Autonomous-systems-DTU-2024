@@ -1,0 +1,32 @@
+{
+    "#ff0000": "Car 1",
+    "#c80000": "Car 2",
+    "#960000": "Car 3",
+    "#800000": "Car 4",
+    "#b65906": "Bicycle 1",
+    "#963204": "Bicycle 2",
+    "#5a1e01": "Bicycle 3",
+    "#5a1e1e": "Bicycle 4",
+    "#cc99ff": "Pedestrian 1",
+    "#bd499b": "Pedestrian 2",
+    "#ef59bf": "Pedestrian 3",
+    "#ff8000": "Truck 1",
+    "#c88000": "Truck 2",
+    "#968000": "Truck 3",
+    "#00ff00": "Small vehicles 1",
+    "#00c800": "Small vehicles 2",
+    "#009600": "Small vehicles 3",
+    "#0080ff": "Traffic signal 1",
+    "#1e1c9e": "Traffic signal 2",
+    "#3c1c64": "Traffic signal 3",
+    "#00ffff": "Traffic sign 1",
+    "#1edcdc": "Traffic sign 2",
+    "#3c9dc7": "Traffic sign 3",
+    "#ffff00": "Utility vehicle 1",
+    "#ffffc8": "Utility vehicle 2",
+  
+    "#000064": "Tractor",
+  
+    "#48d1cc": "Ego car"
+
+}
