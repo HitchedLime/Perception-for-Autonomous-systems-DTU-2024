@@ -274,7 +274,7 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
     # Get the current file's directory
     current_file_path = os.path.abspath(__file__)
 
-    filename = os.path.basename(current_file_path)  # Get the filename: '0000000090.png'
+    filename = os.path.basename(img_path)  # Get the filename: '0000000090.png'
     file_stem = os.path.splitext(filename)[0]  # Remove the extension: '0000000090'
     # Get the parent directory
     parent_directory = os.path.dirname(current_file_path)
@@ -308,7 +308,7 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
         # Create the directory path
         os.makedirs(results_directory_path, exist_ok=True)
 
-        results[0].save(filename=os.path.join(results_directory_path,"{file_stem}_detection.jpg"))  # display to screen
+        results[0].save(filename=os.path.join(results_directory_path,f"{file_stem}_detection.jpg"))  # display to screen
 
     image = cv2.imread(img_path)
 
@@ -329,7 +329,7 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
         max_z=100.0,
         target_class_labels=None,
         save_point_cloud=save_results,
-        save_path=os.path.join(results_directory_path,'{file_stem}_segmented_point_cloud.ply'),
+        save_path=os.path.join(results_directory_path,f'{file_stem}_segmented_point_cloud.ply'),
         visualize=False  # Set to True if you want to visualize
     )
 
