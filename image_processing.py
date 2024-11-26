@@ -3,6 +3,17 @@ import numpy as np
 import open3d as o3d
 import json
 
+def normalize_points(points: np.array):
+    # Compute the magnitude (Euclidean norm) of each point
+    magnitudes = np.linalg.norm(points, axis=1, keepdims=True)
+
+    # Avoid division by zero for points at the origin
+    magnitudes[magnitudes == 0] = 1
+
+    # Normalize each point to have a magnitude of 1
+    normalized_points = points / magnitudes
+    return normalized_points
+
 def compute_disparity_map(rect_img1, rect_img2, min_disparity=0, num_disparities=5*16, block_size=6):
     """
     Compute the disparity map from a pair of rectified stereo images.
@@ -106,10 +117,10 @@ def calculate_q_matrix(P_left, P_right):
 
     # Construct the Q matrix based on the revised stereo geometry
     Q = np.array([
-        [1, 0, 0, -cx],
-        [0, 1, 0, -cy],
-        [0, 0, 0, -fx],  # Note the negative sign here
-        [0, 0, -1 / Tx, (cx - cx_right) / Tx]
+    [1, 0, 0, -cx],
+    [0, 1, 0, -cy],
+    [0, 0, 0, -fx],
+    [0, 0, -1 / Tx, (cx - cx_right) / Tx]
     ])
 
     return Q
@@ -302,11 +313,15 @@ def RectImg2PC(rect_img1, rect_img2, P_left, P_right, max_z=20, color_img=None, 
     point_cloud = o3d.geometry.PointCloud()
     point_cloud.points = o3d.utility.Vector3dVector(points)
 
+    print(f"Points shape: {np.asarray(point_cloud.points).shape}")
+    print(f"Colors shape: {colors.shape}")
+
+
     # Assign colors if available
     if colors is not None:
         point_cloud.colors = o3d.utility.Vector3dVector(colors / 255.0)
 
-    return point_cloud
+    return points, colors
 
 def RectImg2PC_for_clustering(rect_img1, rect_img2, P_left, P_right, max_z=20, mask=None, detection_map=None, detection_labels=None):
     """
@@ -330,25 +345,31 @@ def RectImg2PC_for_clustering(rect_img1, rect_img2, P_left, P_right, max_z=20, m
     Q = calculate_q_matrix(P_left, P_right)
 
     # Compute disparity map
-    disp_map = compute_disparity_map(rect_img1, rect_img2, min_disparity=0, num_disparities=6 * 16, block_size=2)
+    disp_map = compute_disparity_map(rect_img1, rect_img2, min_disparity=0, num_disparities=6 * 16, block_size=5)
+    
     disp_visual = (disp_map - disp_map.min()) / (disp_map.max() - disp_map.min()) * 255
     cv2.imwrite("debug_disparity.png", disp_visual.astype(np.uint8))
     # Apply mask to disparity map if provided
     if mask is not None:
         if mask.shape != disp_map.shape:
             raise ValueError("Mask shape does not match disparity map shape.")
-        disp_map = np.where(mask, disp_map, np.nan)
-
+        disp_map = np.where(mask, disp_map, 0)
     # Create a valid mask for disparity and depth filtering
     valid_disp = disp_map > 0  # Disparity must be positive
-    if max_z is not None:
-        points_3D = cv2.reprojectImageTo3D(disp_map, Q)
-        depth_mask = points_3D[..., 2] <= max_z
-        valid_disp = np.logical_and(valid_disp, depth_mask)
+    # Reproject to 3D
+    points_3D = cv2.reprojectImageTo3D(disp_map, Q, handleMissingValues=True)
 
-    # Reproject to 3D and filter points
-    points_3D = cv2.reprojectImageTo3D(disp_map, Q)
-    points = points_3D[valid_disp]
+    # Apply max_z filtering if provided
+    if max_z is not None:
+        depth_mask = points_3D[..., 2] > 0  # Depth must be positive
+        depth_mask &= points_3D[..., 2] <= max_z
+        valid_disp &= depth_mask
+        points = points_3D[valid_disp]
+
+    # Normalize coordinates
+    print(points)
+    # points = normalize_points(points)
+    # print(points.shape)
 
     # Initialize colors and labels array
     colors = np.zeros((points.shape[0], 3))  # Default: all black
@@ -375,6 +396,6 @@ def RectImg2PC_for_clustering(rect_img1, rect_img2, P_left, P_right, max_z=20, m
 
     # Assign colors
     point_cloud.colors = o3d.utility.Vector3dVector(colors)
-
+    
     return point_cloud, labels
 

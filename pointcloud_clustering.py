@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 import json
 import open3d as o3d
-from image_processing import parse_calibration_data, create_seg_mask_with_mapping, RectImg2PC_for_clustering
+from image_processing import parse_calibration_data, create_seg_mask_with_mapping, RectImg2PC_for_clustering, RectImg2PC, generate_point_cloud
 from sklearn.cluster import DBSCAN
 from collections import Counter
 
@@ -118,6 +118,7 @@ def generate_segmented_point_cloud(
     - mask (np.ndarray): Binary mask used for segmentation.
     """
     # Step 1: Load and convert images to grayscale
+    color_img = cv2.cvtColor(cv2.imread(left_image_path), cv2.COLOR_BGR2RGB)
     rect_img1 = cv2.imread(left_image_path, cv2.IMREAD_GRAYSCALE)
     rect_img2 = cv2.imread(right_image_path, cv2.IMREAD_GRAYSCALE)
     
@@ -153,8 +154,16 @@ def generate_segmented_point_cloud(
         detection_map=detection_map,
         detection_labels=detection_labels
     )
+    points, colors = RectImg2PC(
+        rect_img1=rect_img1,
+        rect_img2=rect_img2,
+        P_left=P_left,
+        P_right=P_right,
+        max_z=max_z,
+        
+        color_img=color_img,
+    )
 
-    
     # Step 6: Save the point cloud if required
     if save_point_cloud:
         o3d.io.write_point_cloud(save_path, point_cloud)
@@ -177,17 +186,34 @@ def generate_segmented_point_cloud(
         # Visualize
         o3d.visualization.draw_geometries([point_cloud], window_name="Segmented Point Cloud")
     
-    return point_cloud, seg_mask,labels
+    return point_cloud, seg_mask,labels, points, colors
 
-def dbscan_with_labels_and_outlier_removal(point_cloud, labels, eps=0.5, min_samples=10):
+def dbscan_with_labels_and_outlier_removal(point_cloud, labels, voxel_size, eps=0.5, min_samples=10):
     """
     Perform DBSCAN clustering on a point cloud, assign detection labels to centroids,
     and remove outliers from the resulting point cloud.
     """
-    points = np.asarray(point_cloud.points)
-    colors = np.asarray(point_cloud.colors)
-    features = np.hstack((points, colors))
+    point_cloud_down, _, mapping_indices = point_cloud.voxel_down_sample_and_trace(
+        voxel_size=voxel_size,
+        min_bound=point_cloud.get_min_bound(),
+        max_bound=point_cloud.get_max_bound(),
+    )
+    # o3d.visualization.draw_geometries([point_cloud_down])
+    # print("Downsampled point cloud size:", np.asarray(point_cloud_down.points).shape)
     
+    # Extract points and colors
+    points = np.asarray(point_cloud_down.points)
+    colors = np.asarray(point_cloud_down.colors)
+    features = np.hstack((points, colors))
+    # print(points.shape)
+    # Aggregate labels for downsampled points
+    downsampled_labels = []
+    for indices in mapping_indices:
+        labels_in_voxel = labels[indices]
+        most_common_label = Counter(labels_in_voxel).most_common(1)[0][0]
+        downsampled_labels.append(most_common_label)
+    labels = np.array(downsampled_labels)
+
     dbscan = DBSCAN(eps=eps, min_samples=min_samples)
     cluster_ids = dbscan.fit_predict(features)
 
@@ -213,7 +239,7 @@ def dbscan_with_labels_and_outlier_removal(point_cloud, labels, eps=0.5, min_sam
         cluster_detection_labels = inlier_labels[cluster_indices]
         most_common_label = Counter(cluster_detection_labels).most_common(1)[0][0]
         cluster_labels.append(most_common_label)
-
+    # print(cluster_labels)
     return np.array(centroids), np.array(cluster_labels), clustered_point_cloud, len(np.unique(inlier_cluster_ids))
 
 def visualize_point_cloud_with_centroids(
@@ -235,13 +261,15 @@ def visualize_point_cloud_with_centroids(
         unique_label_colors = {
             label: np.random.rand(3) for label in unique_labels if label >= 0
         }
-
+    
     # Assign colors to each point based on its cluster label
     points = np.asarray(point_cloud.points)
     colors = np.array([
         unique_label_colors[label] if label >= 0 else [0, 0, 0]  # Black for outliers
         for label in cluster_labels
     ])
+    point_cloud = o3d.geometry.PointCloud()
+    point_cloud.points = o3d.utility.Vector3dVector(points)
     point_cloud.colors = o3d.utility.Vector3dVector(colors)
 
     # Create a list of geometry objects for visualization
@@ -261,6 +289,137 @@ def visualize_point_cloud_with_centroids(
         window_name="Point Cloud with Centroids",
     )
 
+def visualize_original_pc_with_centroids(
+    points, colors, cluster_labels, centroids, centroid_labels, unique_label_colors=None
+):
+    """
+    Visualize a point cloud with the original colors and add centroids using spheres.
+
+    Args:
+        points (np.ndarray): (N, 3) Array of 3D points.
+        colors (np.ndarray): (N, 3) Array of RGB colors corresponding to the points.
+        cluster_labels (np.ndarray): Cluster labels for each point.
+        centroids (np.ndarray): (M, 3) Array of centroid positions for each cluster.
+        centroid_labels (np.ndarray): Labels assigned to each centroid.
+        unique_label_colors (dict or None): Predefined colors for clusters and centroids.
+    """
+    # Ensure colors are normalized to [0, 1] for Open3D
+    if colors is not None:
+        colors = colors / 255.0
+
+    # Create an Open3D point cloud object and assign points and colors
+    point_cloud = o3d.geometry.PointCloud()
+    point_cloud.points = o3d.utility.Vector3dVector(points)
+    if colors is not None:
+        point_cloud.colors = o3d.utility.Vector3dVector(colors)
+
+    # Generate unique colors for clusters if not provided
+    if unique_label_colors is None:
+        unique_labels = np.unique(cluster_labels)
+        unique_label_colors = {
+            label: np.random.rand(3) for label in unique_labels if label >= 0
+        }
+
+    # Create a list of geometries for visualization
+    geometries = [point_cloud]
+
+    # Add centroids as spheres with cluster colors
+    for i, (centroid, label) in enumerate(zip(centroids, centroid_labels)):
+        # Create a sphere for each centroid
+        sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.2)
+        sphere.translate(centroid)  # Move the sphere to the centroid position
+
+        # Use the cluster color or a default color if unavailable
+        sphere_color = unique_label_colors.get(label, [0, 0, 0])
+        sphere.paint_uniform_color(sphere_color)
+        geometries.append(sphere)
+
+    # Visualize the point cloud and centroids
+    o3d.visualization.draw_geometries(
+        geometries,
+        window_name="Point Cloud with Centroids",
+    )
+
+def visualize_label_bounding_box(point_cloud, cluster_labels, label_of_interest):
+    # Extract points with the specified label
+    points = np.asarray(point_cloud.points)
+    points_label = points[cluster_labels == label_of_interest]
+    
+    if points_label.size == 0:
+        print(f"No points found with label {label_of_interest}.")
+        return
+
+    # Create a PointCloud object for the label
+    pcd_label = o3d.geometry.PointCloud()
+    pcd_label.points = o3d.utility.Vector3dVector(points_label)
+    
+    # Compute the axis-aligned bounding box
+    aabb = pcd_label.get_axis_aligned_bounding_box()
+    aabb.color = (1, 0, 0)  # Red color for the bounding box
+
+    # Visualize the point cloud and bounding box
+    o3d.visualization.draw_geometries([point_cloud, aabb])
+
+
+def compute_min_max_coordinates_for_labels(point_cloud, cluster_labels, labels_of_interest):
+    def compute_min_max_coordinates(point_cloud, cluster_labels, label_of_interest):
+        """
+        Compute the minimum and maximum x, y, z coordinates for points with a specific cluster label,
+        and calculate the differences (delta_x, delta_y, delta_z) between them.
+
+        Args:
+            point_cloud (o3d.geometry.PointCloud): The point cloud.
+            cluster_labels (np.ndarray): Cluster labels for each point.
+            label_of_interest (int): The label for which to compute min and max coordinates.
+
+        Returns:
+            min_coords (np.ndarray): Minimum x, y, z coordinates.
+            max_coords (np.ndarray): Maximum x, y, z coordinates.
+            deltas (np.ndarray): Differences between max and min coordinates (delta_x, delta_y, delta_z).
+        """
+        # Ensure cluster_labels is a NumPy array
+        cluster_labels = np.array(cluster_labels)
+        
+        # Extract points from the point cloud
+        points = np.asarray(point_cloud.points)
+        
+        # Filter points with the specified label
+        mask = cluster_labels == label_of_interest
+        points_label = points[mask]
+        
+        # Check if any points have the label
+        if points_label.size == 0:
+            print(f"No points found with label {label_of_interest}.")
+            return None, None, None
+
+        # Compute minimum and maximum coordinates along each axis
+        min_coords = np.min(points_label, axis=0)
+        max_coords = np.max(points_label, axis=0)
+        
+        # Compute deltas (extents) along each axis
+        deltas = max_coords - min_coords
+
+        # Display the results
+        print(f"Label {label_of_interest}:")
+        print(f"  Minimum coordinates: x={min_coords[0]:.2f}, y={min_coords[1]:.2f}, z={min_coords[2]:.2f}")
+        print(f"  Maximum coordinates: x={max_coords[0]:.2f}, y={max_coords[1]:.2f}, z={max_coords[2]:.2f}")
+        print(f"  Deltas: delta_x={deltas[0]:.2f}, delta_y={deltas[1]:.2f}, delta_z={deltas[2]:.2f}")
+        
+        return min_coords, max_coords, deltas
+
+    results = {}
+    for label in labels_of_interest:
+        min_coords, max_coords, deltas = compute_min_max_coordinates(point_cloud, cluster_labels, label)
+        if min_coords is not None:
+            results[label] = {
+                'min_coords': min_coords,
+                'max_coords': max_coords,
+                'delta_x': deltas[0],
+                'delta_y': deltas[1],
+                'delta_z': deltas[2]
+            }
+    return results
+
 def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visualize = False):
     """
     Calculates pointcloud from images, must keep project image structure.
@@ -268,8 +427,10 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
     Returns:
         centroid_coords: List[float, float, float]
     """
+    voxel_size = 0.05
     # Input image
     img_path = img_left
+    color_img = cv2.cvtColor(cv2.imread(img_left), cv2.COLOR_BGR2RGB)
 
     # Get the current file's directory
     current_file_path = os.path.abspath(__file__)
@@ -290,7 +451,13 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
     mask_path = os.path.join(temp_directory_path,"temp.txt")
 
     # Perform prediction
-    results = model.predict(source=img_path, classes=[0, 1, 2], conf=conf)
+    classes = [0,1,2,3,4,5,6,7,8]
+    print(classes)
+    results = model.predict(source=img_path, classes = classes,conf=conf)
+    # for name, cls in zip(results[0].names.values(),results[0].boxes.cls):
+    #     print("name: ",name, "class: ",cls)
+    # import sys
+    # sys.exit()
 
     # Clear the file content (overwrite it)
     with open(mask_path, 'w') as file:
@@ -321,17 +488,18 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
     right_image_path = get_right_image_path(left_image_path)
     calibration_file_path = os.path.join(parent_parent_directory,'34759_final_project_rect/calib_cam_to_cam.txt')
 
-    point_cloud, seg_mask, labels = generate_segmented_point_cloud(
+    point_cloud, seg_mask, labels, points_original, colors_original = generate_segmented_point_cloud(
         left_image_path=left_image_path,
         right_image_path=right_image_path,
         calibration_file_path=calibration_file_path,
         seg_json_path=output_json,
-        max_z=100.0,
+        max_z=30.0,
         target_class_labels=None,
         save_point_cloud=save_results,
         save_path=os.path.join(results_directory_path,f'{file_stem}_segmented_point_cloud.ply'),
         visualize=False  # Set to True if you want to visualize
     )
+
 
     # Extract the number of clusters based on unique colors
     colors = np.asarray(point_cloud.colors)
@@ -340,9 +508,11 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
     # print(f"Number of unique colors (clusters): {n_clusters}")
 
     # Grid search for DBSCAN parameters
-    eps_values = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55]
-    min_samples_values = [50, 100, 150, 200, 350, 300, 400, 500,750, 1000]
-    min_samples_values = min_samples_values[::-1]
+    eps_values = np.array([0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55]) 
+    min_samples_values = [75,100, 150, 200, 350, 300, 400, 500,750, 1000]
+    min_samples_values = np.array(min_samples_values[::-1])
+    # eps_values = eps_values.astype(int)
+    min_samples_values = min_samples_values.astype(int)
     best_params = None
     best_centroids = None
     best_cluster_labels = None
@@ -356,7 +526,8 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
                     point_cloud=point_cloud,
                     labels=labels,
                     eps=eps,
-                    min_samples=min_samples
+                    min_samples=min_samples,
+                    voxel_size = voxel_size
                 )
                 # print(num_clusters)
 
@@ -393,15 +564,27 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
             centroids=best_centroids,
             centroid_labels=best_cluster_labels
         )
+        # points = np.asarray(point_cloud.points)
+        visualize_original_pc_with_centroids(
+            points=points_original,
+            cluster_labels=labels,
+            centroids=best_centroids,
+            centroid_labels=best_cluster_labels,
+            colors=colors_original
+        )
+
+        
+        # Example usage
+        # print(compute_min_max_coordinates_for_labels(point_cloud, labels, [8]))
 
     return best_centroids, best_cluster_labels
 
 
 if __name__=="__main__":
     # Load the model
-    model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\yolo11x-seg.pt")
+    model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\fine_tuned_yolo.pt")
 
     # Test image
-    img_left = r'..\34759_final_project_rect\seq_03\image_02\data\0000000090.png'
+    img_left = r'..\34759_final_project_rect\seq_03\image_02\data\0000000045.png'
 
-    best_centroids, best_cluster_labels = cluster_from_stereo(model=model, img_left=img_left, save_results=True, visualize = True)
+    best_centroids, best_cluster_labels = cluster_from_stereo(model=model, img_left=img_left, conf=0.7,save_results=True, visualize = True)
