@@ -223,7 +223,7 @@ def create_seg_mask(file_path, image_shape, target_class_labels=None):
     # Load segmentation data from JSON file
     with open(file_path, 'r') as f:
         segmentation_data = json.load(f)
-    print(len(segmentation_data))
+    # print(len(segmentation_data))
     # Iterate over each segmentation item (object) in the data
     for segment in segmentation_data:
         class_label = segment['class_label']
@@ -313,8 +313,8 @@ def RectImg2PC(rect_img1, rect_img2, P_left, P_right, max_z=20, color_img=None, 
     point_cloud = o3d.geometry.PointCloud()
     point_cloud.points = o3d.utility.Vector3dVector(points)
 
-    print(f"Points shape: {np.asarray(point_cloud.points).shape}")
-    print(f"Colors shape: {colors.shape}")
+    # print(f"Points shape: {np.asarray(point_cloud.points).shape}")
+    # print(f"Colors shape: {colors.shape}")
 
 
     # Assign colors if available
@@ -367,7 +367,7 @@ def RectImg2PC_for_clustering(rect_img1, rect_img2, P_left, P_right, max_z=20, m
         points = points_3D[valid_disp]
 
     # Normalize coordinates
-    print(points)
+    # print(points)
     # points = normalize_points(points)
     # print(points.shape)
 
@@ -396,6 +396,6 @@ def RectImg2PC_for_clustering(rect_img1, rect_img2, P_left, P_right, max_z=20, m
 
     # Assign colors
     point_cloud.colors = o3d.utility.Vector3dVector(colors)
-    
+
     return point_cloud, labels
 

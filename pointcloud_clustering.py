@@ -7,7 +7,6 @@ import open3d as o3d
 from image_processing import parse_calibration_data, create_seg_mask_with_mapping, RectImg2PC_for_clustering, RectImg2PC, generate_point_cloud
 from sklearn.cluster import DBSCAN
 from collections import Counter
-from tracking import Detection
 
 def get_polygon_points(image, mask_file, output_json):
     """
@@ -453,7 +452,7 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
 
     # Perform prediction
     classes = [0,1,2,3,4,5,6,7,8]
-    print(classes)
+    # print(classes)
     results = model.predict(source=img_path, classes = classes,conf=conf)
     # for name, cls in zip(results[0].names.values(),results[0].boxes.cls):
     #     print("name: ",name, "class: ",cls)
@@ -519,8 +518,6 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
     best_cluster_labels = None
     best_clustered_pcd = None
 
-    detections = []
-
     for eps in eps_values:
         for min_samples in min_samples_values:
             # print(f"Trying eps={eps}, min_samples={min_samples}...")
@@ -555,12 +552,11 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
         # o3d.visualization.draw_geometries([best_clustered_pcd], window_name="Best Clustered Point Cloud")
         for i, (centroid, label) in enumerate(zip(best_centroids, best_cluster_labels)):
             # Print the label in the terminal for reference
-            detections.append(Detection(centroid,label))
             print(f"Centroid {i}: Position={centroid}, Class={label}")
     else:
         print("No matching parameters found in the grid search.")
 
-    if visualize:
+    if visualize and best_clustered_pcd:
         # Visualize the clustered point cloud with centroids and labels
         visualize_point_cloud_with_centroids(
             point_cloud=best_clustered_pcd,
@@ -581,7 +577,7 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
         # Example usage
         # print(compute_min_max_coordinates_for_labels(point_cloud, labels, [8]))
 
-    return detections
+    return best_centroids, best_cluster_labels
 
 
 if __name__=="__main__":
