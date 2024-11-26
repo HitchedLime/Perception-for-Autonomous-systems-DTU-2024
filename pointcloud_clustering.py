@@ -76,25 +76,39 @@ def get_polygon_points(image, mask_file, output_json):
 def get_right_image_path(left_image_path):
     """
     Generate the right image path corresponding to a given left image path.
-    
+
     Args:
         left_image_path (str): Path to the left image.
-        
+
     Returns:
         str: Path to the corresponding right image.
-    """
-    # Split the path into components
-    path_parts = os.path.normpath(left_image_path).split(os.sep)
 
-    # Replace 'image_02' with 'image_03'
+    Raises:
+        ValueError: If 'image_02' is not found in the left image path.
+    """
+    # Normalize and split the path into components
+    left_image_path = os.path.normpath(left_image_path)
+    leading_slash = left_image_path.startswith("/")  # Check if path starts with a leading slash
+    path_parts = left_image_path.split(os.sep)
+
+    # Check and replace 'image_02' with 'image_03'
     if 'image_02' in path_parts:
         path_parts[path_parts.index('image_02')] = 'image_03'
     else:
-        raise ValueError("Left image path does not contain 'image_02'.")
+        raise ValueError(f"Left image path does not contain 'image_02': {left_image_path}")
 
     # Reconstruct the path
     right_image_path = os.path.join(*path_parts)
-    right_image_path = os.path.normpath(right_image_path)  # Normalize the path for correct formatting
+    if leading_slash:  # Re-add leading slash if it was present
+        right_image_path = "/" + right_image_path
+
+    # Normalize again for consistent formatting
+    right_image_path = os.path.normpath(right_image_path)
+
+    # Debug log
+    print(f"Left image path: {left_image_path}")
+    print(f"Right image path: {right_image_path}")
+
     return right_image_path
 
 
@@ -508,8 +522,8 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
     # print(f"Number of unique colors (clusters): {n_clusters}")
 
     # Grid search for DBSCAN parameters
-    eps_values = np.array([0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55]) 
-    min_samples_values = [75,100, 150, 200, 350, 300, 400, 500,750, 1000]
+    eps_values = np.array([0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55,0.6]) 
+    min_samples_values = [50,75,100, 150, 200, 350, 300, 400, 500,750, 1000]
     min_samples_values = np.array(min_samples_values[::-1])
     # eps_values = eps_values.astype(int)
     min_samples_values = min_samples_values.astype(int)
@@ -585,6 +599,6 @@ if __name__=="__main__":
     model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\fine_tuned_yolo.pt")
 
     # Test image
-    img_left = r'..\34759_final_project_rect\seq_03\image_02\data\0000000045.png'
+    img_left = r'..\34759_final_project_rect\seq_02\image_02\data\0000000143.png'
 
     best_centroids, best_cluster_labels = cluster_from_stereo(model=model, img_left=img_left, conf=0.7,save_results=True, visualize = True)
