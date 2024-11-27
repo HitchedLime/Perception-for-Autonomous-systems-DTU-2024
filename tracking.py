@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.optimize import linear_sum_assignment
-from kalmanfilter import KalmanFilter
+from kalmanfilter import *
 
 class Detection:
     def __init__(self, centroid, class_label):
@@ -8,31 +8,42 @@ class Detection:
         self.class_label = class_label  # An integer or string representing the class
 
 class TrackedObject:
-    def __init__(self, detection: Detection, object_id):
+    def __init__(self, detection: Detection, object_id, cov_estimator = None):
         self.id = object_id
         self.class_label = detection.class_label
         self.centroid = detection.centroid
+        
+        # Initialize Kalman filter with current centroid
+        initial_state = np.array([
+            detection.centroid[0], 0,  # x, vx
+            detection.centroid[1], 0,  # y, vy
+            detection.centroid[2], 0   # z, vz
+        ])
+
+        # self.kalman_filter = KalmanFilter3D_with_cov_est(initial_state,self.class_label,cov_estimator )
+        self.kalman_filter = KalmanFilter3D(initial_state)
+
         self.history = [self.centroid.copy()]
         self.time_since_update = 0
         self.age = 1
-        # Initialize Kalman filter if used
-        # self.kalman_filter = KalmanFilter()
+        self.last_timestamp = None  # Store the timestamp of last update
 
-    def predict(self):
-        # If using a Kalman filter, predict the next state
-        # self.kalman_filter.predict()
-        # self.centroid = self.kalman_filter.get_predicted_state()
+    def predict(self, current_timestamp):
+        if self.last_timestamp is None:
+            dt = 0.1  # default value for first prediction
+        else:
+            dt = (current_timestamp - self.last_timestamp).total_seconds()
+            
+        self.centroid = self.kalman_filter.predict(dt)
         self.time_since_update += 1
         self.age += 1
-        # For history, you might want to store predictions as well
-        # self.history.append(self.centroid.copy())
+        self.history.append(self.centroid.copy())
 
-    def update(self, detection: Detection):
-        self.centroid = detection.centroid
+    def update(self, detection: Detection, timestamp):
+        self.centroid = self.kalman_filter.update(detection.centroid)
         self.history.append(self.centroid.copy())
         self.time_since_update = 0
-        # Update Kalman filter with new detection if used
-        # self.kalman_filter.update(detection.centroid)
+        self.last_timestamp = timestamp
 
 def assign_centroids(previous_detections, current_detections, cost_threshold=np.inf, class_mismatch_penalty=1000):
     """
@@ -70,6 +81,7 @@ def assign_centroids(previous_detections, current_detections, cost_threshold=np.
             curr_class = curr_detection.class_label
             # Compute Euclidean distance between centroids
             distance = np.linalg.norm(prev_centroid - curr_centroid)
+            print(f"Distance between {curr_class} and {prev_class}: ",distance)
             # Add penalty if class labels don't match
             if prev_class != curr_class:
                 cost = distance + class_mismatch_penalty
@@ -77,9 +89,10 @@ def assign_centroids(previous_detections, current_detections, cost_threshold=np.
                 cost = distance
             cost_matrix[i, j] = cost
     
+    
     # Apply cost threshold to filter out unlikely matches
     cost_matrix[cost_matrix > cost_threshold] = np.inf
-    
+    print("cost matrix: ",cost_matrix)
     # Check if the cost matrix is feasible
     if np.all(np.isinf(cost_matrix)):
         print("Cost matrix is infeasible (all entries are infinite).")
@@ -88,6 +101,11 @@ def assign_centroids(previous_detections, current_detections, cost_threshold=np.
         unmatched_current = list(range(M))
         return matches, unmatched_previous, unmatched_current
     
+    # Add fallback penalty to still achieve matching
+    fallback_penalty = 10 * cost_threshold if cost_threshold != np.inf else 1e6
+    cost_matrix = np.where(np.isinf(cost_matrix), fallback_penalty, cost_matrix)
+
+
     # Solve the assignment problem using the Hungarian algorithm
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
     
