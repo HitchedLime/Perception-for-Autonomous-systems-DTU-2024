@@ -484,15 +484,15 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
 
     if visualize:
         results[0].show()
-
-    if save_results:
-        results_directory_path = os.path.join(parent_parent_directory,"results")
+    results_directory_path = os.path.join(parent_parent_directory,"results")
+    
+    if save_results:    
     
         # Create the directory path
         os.makedirs(results_directory_path, exist_ok=True)
 
         results[0].save(filename=os.path.join(results_directory_path,f"{file_stem}_detection.jpg"))  # display to screen
-
+    
     image = cv2.imread(img_path)
 
     output_json = os.path.join(temp_directory_path,"points.json")
