@@ -587,10 +587,6 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
             colors=colors_original
         )
 
-        
-        # Example usage
-        # print(compute_min_max_coordinates_for_labels(point_cloud, labels, [8]))
-
     return best_centroids, best_cluster_labels
 
 
