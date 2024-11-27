@@ -34,50 +34,72 @@ class TrackedObject:
         # Update Kalman filter with new detection if used
         # self.kalman_filter.update(detection.centroid)
 
-def assign_centroids(previous_detections, current_detections, cost_threshold=np.inf):
+def assign_centroids(previous_detections, current_detections, cost_threshold=np.inf, class_mismatch_penalty=1000):
     """
-    Assign centroids from the previous frame to the current frame using the Hungarian algorithm.
-
+    Assigns centroids from previous detections to current detections using the Hungarian algorithm.
+    
     Parameters:
-    - previous_detections: A list of Detection objects from the previous frame.
-    - current_detections: A list of Detection objects from the current frame.
-    - cost_threshold: A float representing the maximum allowable cost for assignment.
-
+    - previous_detections: List of Detection objects from the previous frame.
+    - current_detections: List of Detection objects from the current frame.
+    - cost_threshold: Maximum allowable cost for a valid match.
+    - class_mismatch_penalty: Penalty to add to the cost when class labels don't match.
+    
     Returns:
-    - matches: A list of tuples (prev_idx, curr_idx) indicating matched detections.
-    - unmatched_previous: A list of indices of detections from the previous frame that were not matched.
-    - unmatched_current: A list of indices of detections from the current frame that were not matched.
+    - matches: List of tuples (prev_idx, curr_idx) of matched detections.
+    - unmatched_previous: List of indices of unmatched previous detections.
+    - unmatched_current: List of indices of unmatched current detections.
     """
     N = len(previous_detections)
     M = len(current_detections)
-
-    # Initialize the cost matrix with infinite cost
-    cost_matrix = np.full((N, M), np.inf)
-
+    
+    if N == 0 or M == 0:
+        # No detections to match
+        matches = []
+        unmatched_previous = list(range(N))
+        unmatched_current = list(range(M))
+        return matches, unmatched_previous, unmatched_current
+    
+    # Initialize the cost matrix
+    cost_matrix = np.zeros((N, M))
+    
     for i, prev_detection in enumerate(previous_detections):
         prev_centroid = prev_detection.centroid
         prev_class = prev_detection.class_label
         for j, curr_detection in enumerate(current_detections):
             curr_centroid = curr_detection.centroid
             curr_class = curr_detection.class_label
-            # Only consider matching detections of the same class
-            if prev_class == curr_class:
-                # Compute Euclidean distance between centroids
-                cost = np.linalg.norm(prev_centroid - curr_centroid)
-                cost_matrix[i, j] = cost
-
+            # Compute Euclidean distance between centroids
+            distance = np.linalg.norm(prev_centroid - curr_centroid)
+            # Add penalty if class labels don't match
+            if prev_class != curr_class:
+                cost = distance + class_mismatch_penalty
+            else:
+                cost = distance
+            cost_matrix[i, j] = cost
+    
+    # Apply cost threshold to filter out unlikely matches
+    cost_matrix[cost_matrix > cost_threshold] = np.inf
+    
+    # Check if the cost matrix is feasible
+    if np.all(np.isinf(cost_matrix)):
+        print("Cost matrix is infeasible (all entries are infinite).")
+        matches = []
+        unmatched_previous = list(range(N))
+        unmatched_current = list(range(M))
+        return matches, unmatched_previous, unmatched_current
+    
     # Solve the assignment problem using the Hungarian algorithm
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
-
+    
     matches = []
     unmatched_previous = list(range(N))
     unmatched_current = list(range(M))
-
+    
     for i, j in zip(row_ind, col_ind):
-        if cost_matrix[i, j] > cost_threshold:
-            continue
+        if cost_matrix[i, j] == np.inf:
+            continue  # Skip assignments with infinite cost
         matches.append((i, j))
         unmatched_previous.remove(i)
         unmatched_current.remove(j)
-
+    
     return matches, unmatched_previous, unmatched_current
