@@ -467,7 +467,7 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
     mask_path = os.path.join(temp_directory_path,"temp.txt")
 
     # Perform prediction
-    classes = [0,1,2,3,4,5,6,7,8]
+    classes = [0,1,2]
     # print(classes)
     results = model.predict(source=img_path, classes = classes,conf=conf)
     # for name, cls in zip(results[0].names.values(),results[0].boxes.cls):
