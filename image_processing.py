@@ -47,27 +47,25 @@ def compute_disparity_map(rect_img1, rect_img2, min_disparity=0, num_disparities
     return disp_map
 
 def generate_point_cloud(disp_map, Q, color_image=None, max_z=None):
-    # Create a mask where disparity is greater than 0
-    valid_disp = disp_map > 0
-
-    # Reproject to 3D using the valid disparity mask
+    # Reproject to 3D
     points_3D = cv2.reprojectImageTo3D(disp_map, Q)
-
-    # Apply max_z filtering if needed
+    
+    # Create a mask of valid points
+    mask_map = (disp_map > disp_map.min()) & np.isfinite(points_3D[..., 2])
+    
     if max_z is not None:
-        depth_mask = points_3D[..., 2] <= max_z
-        valid_mask = np.logical_and(valid_disp, depth_mask)
-    else:
-        valid_mask = valid_disp
-
-    # Extract valid points and colors
-    points = points_3D[valid_mask]
-
+        mask_map &= points_3D[..., 2] < max_z
+    
+    # Extract valid points
+    points = points_3D[mask_map]
+    
     if color_image is not None:
-        colors = color_image[valid_mask]
+        colors = color_image[mask_map]
         return points, colors
     else:
         return points
+
+
 
 def parse_calibration_data(file_path):
     calibration = {}
@@ -99,31 +97,30 @@ def parse_calibration_data(file_path):
                     print(f"Skipping entry due to non-numeric data: {key}")
                     
     return calibration
-
+    
 def calculate_q_matrix(P_left, P_right):
-    # Extract focal length and principal points from P_left
-    fx = P_left[0, 0]  # Focal length in x direction
-    cx = P_left[0, 2]  # Principal point x-coordinate from the left camera
-    cy = P_left[1, 2]  # Principal point y-coordinate from the left camera
+    # Extract focal lengths and principal points from P_left
+    fx = P_left[0, 0]
+    fy = P_left[1, 1]
+    cx_left = P_left[0, 2]
+    cy_left = P_left[1, 2]
 
-    # Extract the principal point x-coordinate from the right camera
-    cx_right = P_right[0, 2]  # Principal point x-coordinate from the right camera
+    # Extract principal point x-coordinate from P_right
+    cx_right = P_right[0, 2]
 
-    # Calculate baseline from P_right
-    Tx = -P_right[0, 3] / fx  # Baseline distance (assuming P_right[0, 3] is non-zero)
-    if Tx == 0:
-        raise ValueError("Baseline (Tx) is zero. Check P_right[0, 3] and fx.")
+    # Baseline (positive value in meters)
+    baseline = 0.535524  # Ensure this is in the same units as your depth measurements
 
-
-    # Construct the Q matrix based on the revised stereo geometry
+    # Construct the Q matrix with corrected sign
     Q = np.array([
-    [1, 0, 0, -cx],
-    [0, 1, 0, -cy],
-    [0, 0, 0, -fx],
-    [0, 0, -1 / Tx, (cx - cx_right) / Tx]
+        [1, 0, 0, -cx_left],
+        [0, 1, 0, -cy_left],
+        [0, 0, 0, fx],
+        [0, 0, 1 / baseline, (cx_left - cx_right) / baseline]  # Positive sign here
     ])
 
     return Q
+
 
 def extract_bbox_from_txt(file_path, min_confidence=0.5):
     """
