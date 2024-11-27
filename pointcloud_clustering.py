@@ -202,11 +202,12 @@ def generate_segmented_point_cloud(
     
     return point_cloud, seg_mask,labels, points, colors
 
-def dbscan_with_labels_and_outlier_removal(point_cloud, labels, voxel_size, eps=0.5, min_samples=10):
+def dbscan_with_labels_and_outlier_removal(point_cloud, labels, eps=0.5, min_samples=10):
     """
     Perform DBSCAN clustering on a point cloud, assign detection labels to centroids,
     and remove outliers from the resulting point cloud.
     """
+    voxel_size = 0.05
     point_cloud_down, _, mapping_indices = point_cloud.voxel_down_sample_and_trace(
         voxel_size=voxel_size,
         min_bound=point_cloud.get_min_bound(),
@@ -436,30 +437,22 @@ def compute_min_max_coordinates_for_labels(point_cloud, cluster_labels, labels_o
 
 from tracking import Detection
 
-def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visualize = False):
+def cluster_from_stereo(model, classes, img_left_path, img_right_path, calibration_file_path, conf= 0.7, save_results= False, visualize = False):
     """
     Calculates pointcloud from images, must keep project image structure.
 
     Returns:
         centroid_coords: List[float, float, float]
     """
-    voxel_size = 0.05
-    # Input image
-    img_path = img_left
-    color_img = cv2.cvtColor(cv2.imread(img_left), cv2.COLOR_BGR2RGB)
-
     # Get the current file's directory
     current_file_path = os.path.abspath(__file__)
 
-    filename = os.path.basename(img_path)  # Get the filename: '0000000090.png'
+    filename = os.path.basename(img_left_path)  # Get the filename: '0000000090.png'
     file_stem = os.path.splitext(filename)[0]  # Remove the extension: '0000000090'
     # Get the parent directory
     parent_directory = os.path.dirname(current_file_path)
 
-    # Get the parent's parent directory
-    parent_parent_directory = os.path.dirname(parent_directory)
-
-    temp_directory_path = os.path.join(parent_parent_directory,"temp")
+    temp_directory_path = os.path.join(parent_directory,"temp")
     
     # Create the directory path
     os.makedirs(temp_directory_path, exist_ok=True)
@@ -467,13 +460,8 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
     mask_path = os.path.join(temp_directory_path,"temp.txt")
 
     # Perform prediction
-    classes = [0,1,2]
-    # print(classes)
-    results = model.predict(source=img_path, classes = classes,conf=conf)
-    # for name, cls in zip(results[0].names.values(),results[0].boxes.cls):
-    #     print("name: ",name, "class: ",cls)
-    # import sys
-    # sys.exit()
+
+    results = model.predict(source=img_left_path, classes = classes,conf=conf)
 
     # Clear the file content (overwrite it)
     with open(mask_path, 'w') as file:
@@ -484,7 +472,7 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
 
     if visualize:
         results[0].show()
-    results_directory_path = os.path.join(parent_parent_directory,"results")
+    results_directory_path = os.path.join(parent_directory,"results")
     
     if save_results:    
     
@@ -493,20 +481,16 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
 
         results[0].save(filename=os.path.join(results_directory_path,f"{file_stem}_detection.jpg"))  # display to screen
     
-    image = cv2.imread(img_path)
+    image = cv2.imread(img_left_path)
 
     output_json = os.path.join(temp_directory_path,"points.json")
 
     # Save to JSON
     points_with_labels = get_polygon_points(image, mask_path, output_json)
 
-    left_image_path = img_path
-    right_image_path = get_right_image_path(left_image_path)
-    calibration_file_path = os.path.join(parent_parent_directory,'34759_final_project_rect/calib_cam_to_cam.txt')
-
     point_cloud, seg_mask, labels, points_original, colors_original = generate_segmented_point_cloud(
-        left_image_path=left_image_path,
-        right_image_path=right_image_path,
+        left_image_path=img_left_path,
+        right_image_path=img_right_path,
         calibration_file_path=calibration_file_path,
         seg_json_path=output_json,
         max_z=30.0,
@@ -516,18 +500,15 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
         visualize=False  # Set to True if you want to visualize
     )
 
-
     # Extract the number of clusters based on unique colors
     colors = np.asarray(point_cloud.colors)
     unique_colors = np.unique(colors, axis=0)
     n_clusters = len(unique_colors)
-    # print(f"Number of unique colors (clusters): {n_clusters}")
 
     # Grid search for DBSCAN parameters
     eps_values = np.array([0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55,0.6]) 
     min_samples_values = [50,75,100, 150, 200, 350, 300, 400, 500,750, 1000]
     min_samples_values = np.array(min_samples_values[::-1])
-    # eps_values = eps_values.astype(int)
     min_samples_values = min_samples_values.astype(int)
     best_params = None
     best_centroids = None
@@ -545,9 +526,7 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
                     labels=labels,
                     eps=eps,
                     min_samples=min_samples,
-                    voxel_size = voxel_size
                 )
-                # print(num_clusters)
 
                 # Match number of clusters with expected count
                 if num_clusters == n_clusters:
@@ -602,4 +581,4 @@ if __name__=="__main__":
     # Test image
     img_left = r'..\34759_final_project_rect\seq_02\image_02\data\0000000143.png'
 
-    best_centroids, best_cluster_labels = cluster_from_stereo(model=model, img_left=img_left, conf=0.7,save_results=True, visualize = True)
+    best_centroids, best_cluster_labels = cluster_from_stereo(model=model, classes = [0,1,2,3,4,5,6,7,8], img_left=img_left, conf=0.7,save_results=True, visualize = True)
