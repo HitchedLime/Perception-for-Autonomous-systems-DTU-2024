@@ -434,6 +434,8 @@ def compute_min_max_coordinates_for_labels(point_cloud, cluster_labels, labels_o
             }
     return results
 
+from tracking import Detection
+
 def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visualize = False):
     """
     Calculates pointcloud from images, must keep project image structure.
@@ -532,6 +534,8 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
     best_cluster_labels = None
     best_clustered_pcd = None
 
+    detections = []
+
     for eps in eps_values:
         for min_samples in min_samples_values:
             # print(f"Trying eps={eps}, min_samples={min_samples}...")
@@ -566,6 +570,7 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
         # o3d.visualization.draw_geometries([best_clustered_pcd], window_name="Best Clustered Point Cloud")
         for i, (centroid, label) in enumerate(zip(best_centroids, best_cluster_labels)):
             # Print the label in the terminal for reference
+            detections.append(Detection(centroid,label))
             print(f"Centroid {i}: Position={centroid}, Class={label}")
     else:
         print("No matching parameters found in the grid search.")
@@ -587,7 +592,7 @@ def cluster_from_stereo(model, img_left, conf= 0.7, save_results= False, visuali
             colors=colors_original
         )
 
-    return best_centroids, best_cluster_labels
+    return detections
 
 
 if __name__=="__main__":

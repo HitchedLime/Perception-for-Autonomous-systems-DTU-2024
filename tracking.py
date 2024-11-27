@@ -12,47 +12,27 @@ class TrackedObject:
         self.id = object_id
         self.class_label = detection.class_label
         self.centroid = detection.centroid
-        self.age = 1  # Number of frames the object has been tracked
+        self.history = [self.centroid.copy()]
         self.time_since_update = 0
-        self.history = [self.centroid]
-        # Initialize Kalman filter if you plan to use it later
+        self.age = 1
+        # Initialize Kalman filter if used
         # self.kalman_filter = KalmanFilter()
 
     def predict(self):
-        # Predict the next centroid (if using Kalman filter)
-        # For now, we can skip this step
+        # If using a Kalman filter, predict the next state
+        # self.kalman_filter.predict()
+        # self.centroid = self.kalman_filter.get_predicted_state()
         self.time_since_update += 1
         self.age += 1
+        # For history, you might want to store predictions as well
+        # self.history.append(self.centroid.copy())
 
     def update(self, detection: Detection):
         self.centroid = detection.centroid
-        self.history.append(self.centroid)
+        self.history.append(self.centroid.copy())
         self.time_since_update = 0
-        # Update Kalman filter here if using
-
-
-def associate_detections_to_trackers(detections, trackers, threshold = np.inf):
-    cost_matrix = np.zeros((len(trackers), len(detections)), dtype=np.float32)
-
-    for t, tracker in enumerate(trackers):
-        for d, detection in enumerate(detections):
-            # Compute the cost (e.g., Euclidean distance)
-            cost_matrix[t, d] = np.linalg.norm(tracker.centroid - detection.centroid)
-
-    row_ind, col_ind = linear_sum_assignment(cost_matrix)
-
-    matches = []
-    unmatched_trackers = list(range(len(trackers)))
-    unmatched_detections = list(range(len(detections)))
-
-    for t, d in zip(row_ind, col_ind):
-        if cost_matrix[t, d] > threshold:  # Define a cost threshold
-            continue
-        matches.append((t, d))
-        unmatched_trackers.remove(t)
-        unmatched_detections.remove(d)
-
-    return matches, unmatched_detections, unmatched_trackers
+        # Update Kalman filter with new detection if used
+        # self.kalman_filter.update(detection.centroid)
 
 def assign_centroids(previous_detections, current_detections, cost_threshold=np.inf):
     """
