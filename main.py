@@ -112,14 +112,118 @@ def visualize_tracked_objects_histories(tracked_objects):
 
     plt.show()
 
+def visualize_tracking_with_pointcloud(points, colors, tracked_objects, window_name="Tracking Visualization"):
+    """
+    Visualize point cloud with tracked object paths in real-time.
+    
+    Args:
+        points (np.ndarray): Current frame's point cloud points
+        colors (np.ndarray): Current frame's point cloud colors
+        tracked_objects (list): List of TrackedObject instances
+        window_name (str): Name of the visualization window
+    """
+    # Create visualization geometries list
+    geometries = []
+    
+    # Add current point cloud
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    if colors is not None:
+        pcd.colors = o3d.utility.Vector3dVector(colors / 255.0)  # Normalize colors
+    geometries.append(pcd)
+    
+    # Define colors for different classes
+    class_colors = {
+        0: [1, 0, 0],  # Red for class 0
+        1: [0, 1, 0],  # Green for class 1
+        2: [0, 0, 1]   # Blue for class 2
+    }
+    
+    # Add trajectory lines and current position markers for each tracked object
+    for obj in tracked_objects:
+        if len(obj.history) > 1:
+            # Create line set for trajectory
+            line_points = np.array(obj.history)
+            lines = [[i, i+1] for i in range(len(line_points)-1)]
+            
+            line_set = o3d.geometry.LineSet()
+            line_set.points = o3d.utility.Vector3dVector(line_points)
+            line_set.lines = o3d.utility.Vector2iVector(lines)
+            
+            # Set color based on object class
+            color = class_colors.get(obj.class_label, [0.5, 0.5, 0.5])  # Default gray if class not found
+            line_colors = [color for _ in range(len(lines))]
+            line_set.colors = o3d.utility.Vector3dVector(line_colors)
+            
+            geometries.append(line_set)
+            
+            # Add sphere at current position
+            sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.1)
+            sphere.translate(obj.centroid)
+            sphere.paint_uniform_color(color)
+            geometries.append(sphere)
+    
+    # Visualize
+    o3d.visualization.draw_geometries(geometries, window_name=window_name)
+
+# def visualize_tracking_with_pointcloud(pointcloud, tracked_objects, window_name="Tracking Visualization"):
+#     """
+#     Visualize point cloud with tracked object paths in real-time.
+    
+#     Args:
+#         points (np.ndarray): Current frame's point cloud points
+#         colors (np.ndarray): Current frame's point cloud colors
+#         tracked_objects (list): List of TrackedObject instances
+#         window_name (str): Name of the visualization window
+#     """
+#     # Create visualization geometries list
+#     geometries = []
+    
+#     # Add current point cloud
+#     for cloud in pointcloud:
+#         geometries.append(cloud)
+    
+#     # Define colors for different classes
+#     class_colors = {
+#         0: [1, 0, 0],  # Red for class 0
+#         1: [0, 1, 0],  # Green for class 1
+#         2: [0, 0, 1]   # Blue for class 2
+#     }
+    
+#     # Add trajectory lines and current position markers for each tracked object
+#     for obj in tracked_objects:
+#         if len(obj.history) > 1:
+#             # Create line set for trajectory
+#             line_points = np.array(obj.history)
+#             lines = [[i, i+1] for i in range(len(line_points)-1)]
+            
+#             line_set = o3d.geometry.LineSet()
+#             line_set.points = o3d.utility.Vector3dVector(line_points)
+#             line_set.lines = o3d.utility.Vector2iVector(lines)
+            
+#             # Set color based on object class
+#             color = class_colors.get(obj.class_label, [0.5, 0.5, 0.5])  # Default gray if class not found
+#             line_colors = [color for _ in range(len(lines))]
+#             line_set.colors = o3d.utility.Vector3dVector(line_colors)
+            
+#             geometries.append(line_set)
+            
+#             # Add sphere at current position
+#             sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.2)
+#             sphere.translate(obj.centroid)
+#             sphere.paint_uniform_color(color)
+#             geometries.append(sphere)
+    
+#     # Visualize
+#     o3d.visualization.draw_geometries(geometries, window_name=window_name)
 
 if __name__ == "__main__":
     # model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\fine_tuned_yolo.pt")
     model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\yolo11x-seg.pt")
 
     rect_folder = r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\34759_final_project_rect"
-    seq = "seq_01"
-    frame_count = 30
+    seq = "seq_02"
+    frame_count = 10
 
     # classes = [0,4,8]
     classes = [0,1,2]
@@ -135,12 +239,30 @@ if __name__ == "__main__":
     tracked_objects = []
     all_tracked_objects = []
     next_object_id = 0
+    point_clouds = []
     for frame_idx, (frame_left, frame_right, current_timestamp) in enumerate(zip(seq_list["left"],seq_list["right"],seq_list["timestamps"])):
         print(f"\nProcessing frame {frame_idx + 1}/{len(seq_list['left'])}")
         
         calibration_file_path = seq_list["calibration"]
         current_detections = cluster_from_stereo(model, classes, frame_left, frame_right, calibration_file_path, conf= 0.7, save_results= False, visualize = False)
         print(f"Number of current detections: {len(current_detections)}")
+
+        print("Measured centroids: ")
+        [print(detection.centroid) for detection in current_detections]
+
+        # Get original pointcloud for visualization
+        point_cloud, seg_mask, labels, points_original, colors_original = generate_segmented_point_cloud(
+            left_image_path=frame_left,
+            right_image_path=frame_right,
+            calibration_file_path=calibration_file_path,
+            seg_json_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),"temp","points.json"),
+            max_z=100.0,
+            target_class_labels=None,
+            save_point_cloud=False,
+            save_path="",
+            visualize=False  # Set to True if you want to visualize
+        )
+        point_clouds.append(point_cloud)
 
         # Predict tracked object positions
         for obj in tracked_objects:
@@ -179,8 +301,22 @@ if __name__ == "__main__":
         tracked_objects = [obj for obj in tracked_objects if obj.time_since_update <= max_age]
         all_tracked_objects.extend(lost_objects)
 
+        
+        # visualize_tracking_with_pointcloud(
+        #     pointcloud=point_clouds,
+        #     tracked_objects=tracked_objects
+        # )
+
+        # o3d.visualization.draw_geometries(point_clouds)
+
     # After the loop, add remaining tracked objects
     all_tracked_objects.extend(tracked_objects)
 
     # Visualize after the run
+    # Visualize current frame with trajectories
+    visualize_tracking_with_pointcloud(
+        points=points_original,
+        colors=colors_original,
+        tracked_objects=tracked_objects
+    )
     visualize_tracked_objects_histories(all_tracked_objects)
