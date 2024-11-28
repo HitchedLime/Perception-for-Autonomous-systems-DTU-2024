@@ -579,6 +579,8 @@ if __name__=="__main__":
     model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\fine_tuned_yolo.pt")
 
     # Test image
-    img_left = r'..\34759_final_project_rect\seq_02\image_02\data\0000000143.png'
+    img_left = r'..\34759_final_project_rect\seq_01\image_02\data\000000.png'
+    img_right = r'..\34759_final_project_rect\seq_01\image_03\data\000000.png'
+    calibration_file_path = r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\34759_final_project_rect\calib_cam_to_cam.txt"
 
-    best_centroids, best_cluster_labels = cluster_from_stereo(model=model, classes = [0,1,2,3,4,5,6,7,8], img_left=img_left, conf=0.7,save_results=True, visualize = True)
+    detections = cluster_from_stereo(model=model, classes = [0,1,2,3,4,5,6,7,8], img_left_path=img_left, img_right_path=img_right, calibration_file_path=calibration_file_path, conf=0.2,save_results=True, visualize = True)

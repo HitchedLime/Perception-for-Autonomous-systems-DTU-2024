@@ -154,13 +154,13 @@ class KalmanFilter3D:
         
         # Initialize covariance with higher uncertainty for velocity
         self.P = np.diag([
-            10, 1e3,  # x, vx uncertainty
-            10, 1e3,  # y, vy uncertainty
-            10, 1e3   # z, vz uncertainty
+            10, 100,  # x, vx uncertainty
+            10, 100,  # y, vy uncertainty
+            10, 100   # z, vz uncertainty
         ])
         
         # Measurement noise - adjust based on your sensor characteristics
-        self.R = np.diag([1e-1, 1e-1, 1e-1])  # Position measurement noise
+        self.R = np.diag([1e-2, 1e-2, 1e-2])  # Position measurement noise
         
         # Observation matrix (we only measure position)
         self.H = np.array([
@@ -183,7 +183,7 @@ class KalmanFilter3D:
         """
         # Limit dt to reasonable values to prevent instability
         dt = min(max(dt, 0.01), 1.0)
-        
+        print(dt)
         # State transition matrix
         self.F = np.array([
             [1, dt, 0,  0, 0,  0],

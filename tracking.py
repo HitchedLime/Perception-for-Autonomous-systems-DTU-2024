@@ -37,7 +37,7 @@ class TrackedObject:
         self.centroid = self.kalman_filter.predict(dt)
         self.time_since_update += 1
         self.age += 1
-        self.history.append(self.centroid.copy())
+        # self.history.append(self.centroid.copy())
 
     def update(self, detection: Detection, timestamp):
         self.centroid = self.kalman_filter.update(detection.centroid)
@@ -92,7 +92,7 @@ def assign_centroids(previous_detections, current_detections, cost_threshold=np.
             curr_class = curr_detection.class_label
             # Compute Euclidean distance between centroids
             distance = np.linalg.norm(prev_centroid - curr_centroid)
-            print(f"Distance between {curr_class} and {prev_class}: ",distance)
+            # print(f"Distance between {curr_class} and {prev_class}: ",distance)
             # Add penalty if class labels don't match
             if prev_class != curr_class:
                 cost = distance + class_mismatch_penalty

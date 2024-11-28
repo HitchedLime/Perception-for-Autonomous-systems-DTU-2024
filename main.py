@@ -222,7 +222,7 @@ if __name__ == "__main__":
     model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\yolo11x-seg.pt")
 
     rect_folder = r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\34759_final_project_rect"
-    seq = "seq_02"
+    seq = "seq_01"
     frame_count = 10
 
     # classes = [0,4,8]
@@ -231,9 +231,9 @@ if __name__ == "__main__":
     seq_list = getImageSeq(path=rect_folder, seq=seq, frame_count=frame_count)
 
     # Parameters
-    cost_threshold = 50
+    cost_threshold = 30
     class_mismatch_penalty = 1000
-    max_age = 5
+    max_age = 20
 
     # Main tracking loop
     tracked_objects = []
@@ -247,8 +247,8 @@ if __name__ == "__main__":
         current_detections = cluster_from_stereo(model, classes, frame_left, frame_right, calibration_file_path, conf= 0.7, save_results= False, visualize = False)
         print(f"Number of current detections: {len(current_detections)}")
 
-        print("Measured centroids: ")
-        [print(detection.centroid) for detection in current_detections]
+        # print("Measured centroids: ")
+        # [print(detection.centroid) for detection in current_detections]
 
         # Get original pointcloud for visualization
         point_cloud, seg_mask, labels, points_original, colors_original = generate_segmented_point_cloud(
