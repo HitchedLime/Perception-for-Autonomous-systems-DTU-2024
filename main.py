@@ -6,6 +6,7 @@ from image_processing import *
 from ultralytics import YOLO
 from kalmanfilter import *
 from datetime import datetime
+from labelextract import *
 
 def parse_timestamps(timestamp_file):
     """
@@ -203,6 +204,10 @@ if __name__ == "__main__":
 
     max_z=50.0
 
+    # label extraction
+    labels_path = r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\34759_final_project_rect\seq_01\labels.txt"
+    labels_dict = parse_label_file(labels_path)
+
     # classes = [0,4,8]
     classes = [0,1,2]
 
@@ -224,6 +229,11 @@ if __name__ == "__main__":
         calibration_file_path = seq_list["calibration"]
         current_detections = cluster_from_stereo(model, classes, frame_left, frame_right, calibration_file_path, conf= 0.7, max_z = max_z, save_results= False, visualize = False)
         print(f"Number of current detections: {len(current_detections)}")
+
+        ####### True location labels (WILL ONLY WORK FOR SEQ1) ###########
+        locations = filter_and_extract_locations(labels_dict, frame=frame_idx, track_id=[0,1], obj_type=None)
+        tracked_objects.append(TrackedObject(Detection(locations[0],2), 101))
+        tracked_objects.append(TrackedObject(Detection(locations[1],2), 102))  
 
         # print("Measured centroids: ")
         # [print(detection.centroid) for detection in current_detections]
