@@ -51,17 +51,28 @@ def assign_centroids(previous_detections, current_detections, cost_threshold=np.
     """
     N = len(previous_detections)
     M = len(current_detections)
+    INF_COST = 1e6  # Define a large cost for dummy assignments
     
-    if N == 0 or M == 0:
-        # No detections to match
+    if N == 0 and M == 0:
+        return [], [], []
+    if N == 0:
         matches = []
-        unmatched_previous = list(range(N))
+        unmatched_previous = []
         unmatched_current = list(range(M))
         return matches, unmatched_previous, unmatched_current
+    if M == 0:
+        matches = []
+        unmatched_previous = list(range(N))
+        unmatched_current = []
+        return matches, unmatched_previous, unmatched_current
     
-    # Initialize the cost matrix
-    cost_matrix = np.zeros((N, M))
+    # Determine the size of the square cost matrix
+    size = max(N, M)
     
+    # Initialize the cost matrix with INF_COST
+    cost_matrix = np.full((size, size), INF_COST)
+    
+    # Populate the cost matrix with actual costs
     for i, prev_detection in enumerate(previous_detections):
         prev_centroid = prev_detection.centroid
         prev_class = prev_detection.class_label
@@ -77,29 +88,25 @@ def assign_centroids(previous_detections, current_detections, cost_threshold=np.
                 cost = distance
             cost_matrix[i, j] = cost
     
-    # Apply cost threshold to filter out unlikely matches
-    cost_matrix[cost_matrix > cost_threshold] = np.inf
-    
-    # Check if the cost matrix is feasible
-    if np.all(np.isinf(cost_matrix)):
-        print("Cost matrix is infeasible (all entries are infinite).")
-        matches = []
-        unmatched_previous = list(range(N))
-        unmatched_current = list(range(M))
-        return matches, unmatched_previous, unmatched_current
-    
-    # Solve the assignment problem using the Hungarian algorithm
+    # Perform the assignment
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
     
     matches = []
-    unmatched_previous = list(range(N))
-    unmatched_current = list(range(M))
+    unmatched_previous = set(range(N))
+    unmatched_current = set(range(M))
     
     for i, j in zip(row_ind, col_ind):
-        if cost_matrix[i, j] == np.inf:
-            continue  # Skip assignments with infinite cost
-        matches.append((i, j))
-        unmatched_previous.remove(i)
-        unmatched_current.remove(j)
+        if i < N and j < M:
+            cost = cost_matrix[i, j]
+            if cost <= cost_threshold:
+                matches.append((i, j))
+                unmatched_previous.discard(i)
+                unmatched_current.discard(j)
+            # Else, it's an assignment to dummy (INF_COST), treat as unmatched
+        # Assignments beyond N or M are dummy assignments, already considered unmatched
+    
+    # Convert sets to sorted lists
+    unmatched_previous = sorted(list(unmatched_previous))
+    unmatched_current = sorted(list(unmatched_current))
     
     return matches, unmatched_previous, unmatched_current
