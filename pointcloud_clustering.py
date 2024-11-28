@@ -207,7 +207,7 @@ def dbscan_with_labels_and_outlier_removal(point_cloud, labels, eps=0.5, min_sam
     Perform DBSCAN clustering on a point cloud, assign detection labels to centroids,
     and remove outliers from the resulting point cloud.
     """
-    voxel_size = 0.05
+    voxel_size = 0.1
     point_cloud_down, _, mapping_indices = point_cloud.voxel_down_sample_and_trace(
         voxel_size=voxel_size,
         min_bound=point_cloud.get_min_bound(),
@@ -437,7 +437,7 @@ def compute_min_max_coordinates_for_labels(point_cloud, cluster_labels, labels_o
 
 from tracking import Detection
 
-def cluster_from_stereo(model, classes, img_left_path, img_right_path, calibration_file_path, conf= 0.7, save_results= False, visualize = False):
+def cluster_from_stereo(model, classes, img_left_path, img_right_path, calibration_file_path, conf= 0.7, max_z: float=100.0, save_results= False, visualize = False):
     """
     Calculates pointcloud from images, must keep project image structure.
 
@@ -461,7 +461,13 @@ def cluster_from_stereo(model, classes, img_left_path, img_right_path, calibrati
 
     # Perform prediction
 
-    results = model.predict(source=img_left_path, classes = classes,conf=conf)
+    results1 = model.predict(source=img_left_path, classes = classes,conf=conf)
+    results2 = model.predict(source=img_right_path, classes = classes,conf=conf)
+
+    if len(results1[0].names) >= len(results2[0].names):
+        results = results1
+    else:
+        results = results2
 
     # Clear the file content (overwrite it)
     with open(mask_path, 'w') as file:
@@ -493,7 +499,7 @@ def cluster_from_stereo(model, classes, img_left_path, img_right_path, calibrati
         right_image_path=img_right_path,
         calibration_file_path=calibration_file_path,
         seg_json_path=output_json,
-        max_z=30.0,
+        max_z=max_z,
         target_class_labels=None,
         save_point_cloud=save_results,
         save_path=os.path.join(results_directory_path,f'{file_stem}_segmented_point_cloud.ply'),
@@ -576,11 +582,12 @@ def cluster_from_stereo(model, classes, img_left_path, img_right_path, calibrati
 
 if __name__=="__main__":
     # Load the model
-    model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\fine_tuned_yolo.pt")
+    model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\yolo11x-seg.pt")
 
     # Test image
-    img_left = r'..\34759_final_project_rect\seq_01\image_02\data\000000.png'
-    img_right = r'..\34759_final_project_rect\seq_01\image_03\data\000000.png'
+    img_left = r'..\34759_final_project_rect\seq_02\image_02\data\0000000001.png'
+    img_right = r'..\34759_final_project_rect\seq_02\image_03\data\0000000001.png'
     calibration_file_path = r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\34759_final_project_rect\calib_cam_to_cam.txt"
 
-    detections = cluster_from_stereo(model=model, classes = [0,1,2,3,4,5,6,7,8], img_left_path=img_left, img_right_path=img_right, calibration_file_path=calibration_file_path, conf=0.2,save_results=True, visualize = True)
+    max_z = 100.0
+    detections = cluster_from_stereo(model=model, classes = [0,1,2], img_left_path=img_left, img_right_path=img_right, calibration_file_path=calibration_file_path, conf=0.7,max_z=max_z, save_results=True, visualize = True)

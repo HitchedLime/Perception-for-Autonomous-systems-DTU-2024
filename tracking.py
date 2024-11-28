@@ -29,12 +29,12 @@ class TrackedObject:
         self.last_timestamp = None  # Store the timestamp of last update
 
     def predict(self, current_timestamp):
-        if self.last_timestamp is None:
-            dt = 0.1  # default value for first prediction
-        else:
-            dt = (current_timestamp - self.last_timestamp).total_seconds()
+        # if self.last_timestamp is None:
+        #     dt = 0.1  # default value for first prediction
+        # else:
+        #     dt = (current_timestamp - self.last_timestamp).total_seconds()
             
-        self.centroid = self.kalman_filter.predict(dt)
+        # self.centroid = self.kalman_filter.predict(dt)
         self.time_since_update += 1
         self.age += 1
         # self.history.append(self.centroid.copy())
@@ -100,6 +100,7 @@ def assign_centroids(previous_detections, current_detections, cost_threshold=np.
                 cost = distance
             cost_matrix[i, j] = cost
     
+    print(cost_matrix)
     # Perform the assignment
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
     
