@@ -6,7 +6,310 @@ from image_processing import *
 from ultralytics import YOLO
 from kalmanfilter import *
 from datetime import datetime
+import shutil
+import time
 
+
+def clean_temp_folder():
+    """Clean all files in the temp folder"""
+    temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp")
+    if os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
+    os.makedirs(temp_dir)
+
+def save_frame_data_with_metadata(points, colors, frame_idx, tracked_objects, output_dir):
+    """
+    Save point cloud data and visualization metadata separately.
+    
+    Args:
+        points (np.ndarray): Point cloud points
+        colors (np.ndarray): Point cloud colors (0-255)
+        frame_idx (int): Frame number
+        tracked_objects (list): List of TrackedObject instances
+        output_dir (str): Output directory path
+    """
+    # Create subdirectories
+    pc_dir = os.path.join(output_dir, "point_clouds")
+    meta_dir = os.path.join(output_dir, "metadata")
+    os.makedirs(pc_dir, exist_ok=True)
+    os.makedirs(meta_dir, exist_ok=True)
+    
+    # Save original point cloud
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    if colors is not None:
+        pcd.colors = o3d.utility.Vector3dVector(colors / 255.0)
+    
+    pc_filename = f"frame_{frame_idx:04d}.ply"
+    o3d.io.write_point_cloud(os.path.join(pc_dir, pc_filename), pcd)
+    
+    # Prepare visualization metadata
+    metadata = {
+        'frame_idx': frame_idx,
+        'objects': []
+    }
+    
+    # Define colors for different classes
+    class_colors = {
+        0: [1, 0, 0],  # Red for class 0
+        1: [0, 1, 0],  # Green for class 1
+        2: [0, 0, 1]   # Blue for class 2
+    }
+    
+    # Add metadata for each tracked object
+    for obj in tracked_objects:
+        object_data = {
+            'id': obj.id,
+            'class_label': obj.class_label,
+            'color': class_colors.get(obj.class_label, [0.5, 0.5, 0.5]),
+            'centroid': obj.centroid.tolist(),
+            'trail': [point.tolist() for point in obj.history]
+        }
+        metadata['objects'].append(object_data)
+    
+    # Save metadata
+    meta_filename = f"frame_{frame_idx:04d}.json"
+    with open(os.path.join(meta_dir, meta_filename), 'w') as f:
+        json.dump(metadata, f)
+
+def create_sphere_mesh(center, radius, color):
+    """Create a sphere mesh at given center position."""
+    sphere = o3d.geometry.TriangleMesh.create_sphere(radius=radius)
+    sphere.translate(center)
+    sphere.paint_uniform_color(color)
+    return sphere
+
+def play_point_cloud_sequence_with_trails(folder_path, view_params=None, frame_delay=0.1):
+    """
+    Play a sequence of point clouds with visualization of trails and centroids.
+    
+    Args:
+        folder_path (str): Base path containing point_clouds and metadata folders
+        view_params (dict): View parameters for visualization
+        frame_delay (float): Delay between frames in seconds
+    """
+    pc_dir = os.path.join(folder_path, "point_clouds")
+    meta_dir = os.path.join(folder_path, "metadata")
+    
+    # Get all PLY files
+    ply_files = sorted(glob.glob(os.path.join(pc_dir, "frame_*.ply")))
+    
+    if not ply_files:
+        print("No point cloud files found!")
+        return
+    
+    # Create visualizer
+    vis = o3d.visualization.Visualizer()
+    vis.create_window()
+    
+    # Set render options for thicker lines
+    render_option = vis.get_render_option()
+    render_option.line_width = 20.0  # Increase line width
+    render_option.point_size = 1.5   # Adjust point size if needed
+    
+    # Load first frame
+    pcd = o3d.io.read_point_cloud(ply_files[0])
+    vis.add_geometry(pcd)
+    
+    # Dictionaries to store geometries
+    line_sets = {}
+    centroid_spheres = {}
+    
+    # Set view parameters
+    ctr = vis.get_view_control()
+    if view_params:
+        if 'lookat' in view_params:
+            ctr.set_lookat(view_params['lookat'])
+        if 'front' in view_params:
+            ctr.set_front(view_params['front'])
+        if 'up' in view_params:
+            ctr.set_up(view_params['up'])
+        if 'zoom' in view_params:
+            ctr.set_zoom(view_params['zoom'])
+    
+    try:
+        for ply_file in ply_files:
+            frame_idx = int(os.path.splitext(os.path.basename(ply_file))[0].split('_')[1])
+            meta_file = os.path.join(meta_dir, f"frame_{frame_idx:04d}.json")
+            
+            # Load point cloud and metadata
+            new_pcd = o3d.io.read_point_cloud(ply_file)
+            with open(meta_file, 'r') as f:
+                metadata = json.load(f)
+            
+            # Update point cloud
+            pcd.points = new_pcd.points
+            pcd.colors = new_pcd.colors
+            vis.update_geometry(pcd)
+            
+            # Remove old geometries
+            for line_set in line_sets.values():
+                vis.remove_geometry(line_set, False)
+            for sphere in centroid_spheres.values():
+                vis.remove_geometry(sphere, False)
+            line_sets.clear()
+            centroid_spheres.clear()
+            
+            # Create new geometries for each object
+            for obj_data in metadata['objects']:
+                obj_id = obj_data['id']
+                color = obj_data['color']
+                trail_points = np.array(obj_data['trail'])
+                centroid = np.array(obj_data['centroid'])
+                
+                # Create trail lines
+                if len(trail_points) > 1:
+                    line_set = o3d.geometry.LineSet()
+                    line_set.points = o3d.utility.Vector3dVector(trail_points)
+                    line_set.lines = o3d.utility.Vector2iVector(
+                        [[i, i+1] for i in range(len(trail_points)-1)]
+                    )
+                    line_set.colors = o3d.utility.Vector3dVector([color] * (len(trail_points)-1))
+                    line_sets[obj_id] = line_set
+                    vis.add_geometry(line_set, False)
+                
+                # Create centroid sphere (smaller radius for better performance)
+                sphere = create_sphere_mesh(centroid, radius=0.2, color=color)
+                centroid_spheres[obj_id] = sphere
+                vis.add_geometry(sphere, False)
+            
+            # Update visualization
+            vis.poll_events()
+            vis.update_renderer()
+            time.sleep(frame_delay/10)
+            
+            print(f"Playing frame: {os.path.basename(ply_file)}", end='\r')
+    
+    except KeyboardInterrupt:
+        print("\nPlayback interrupted by user")
+    finally:
+        vis.destroy_window()
+
+def capture_point_cloud_sequence(folder_path, output_image_dir, view_params=None, width=1920, height=1080):
+    """
+    Capture each frame of the point cloud sequence as an image.
+    
+    Args:
+        folder_path (str): Base path containing point_clouds and metadata folders
+        output_image_dir (str): Directory to save captured images
+        view_params (dict): View parameters for visualization
+        width (int): Width of output image
+        height (int): Height of output image
+    """
+    pc_dir = os.path.join(folder_path, "point_clouds")
+    meta_dir = os.path.join(folder_path, "metadata")
+    os.makedirs(output_image_dir, exist_ok=True)
+    
+    # Get all PLY files
+    ply_files = sorted(glob.glob(os.path.join(pc_dir, "frame_*.ply")))
+    
+    if not ply_files:
+        print("No point cloud files found!")
+        return
+    
+    # Create visualizer
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(width=width, height=height, visible=False)  # Make window invisible
+    
+    # Set render options
+    render_option = vis.get_render_option()
+    render_option.line_width = 5.0
+    render_option.point_size = 2.0
+    render_option.background_color = np.array([255, 255, 255])  # Black background
+    
+    # Load first frame
+    pcd = o3d.io.read_point_cloud(ply_files[0])
+    vis.add_geometry(pcd)
+    
+    # Dictionaries to store geometries
+    line_sets = {}
+    centroid_spheres = {}
+    
+    # Set view parameters
+    ctr = vis.get_view_control()
+    if view_params:
+        if 'lookat' in view_params:
+            ctr.set_lookat(view_params['lookat'])
+        if 'front' in view_params:
+            ctr.set_front(view_params['front'])
+        if 'up' in view_params:
+            ctr.set_up(view_params['up'])
+        if 'zoom' in view_params:
+            ctr.set_zoom(view_params['zoom'])
+    
+    try:
+        for ply_file in ply_files:
+            frame_idx = int(os.path.splitext(os.path.basename(ply_file))[0].split('_')[1])
+            meta_file = os.path.join(meta_dir, f"frame_{frame_idx:04d}.json")
+            
+            # Load point cloud and metadata
+            new_pcd = o3d.io.read_point_cloud(ply_file)
+            with open(meta_file, 'r') as f:
+                metadata = json.load(f)
+            
+            # Update point cloud
+            pcd.points = new_pcd.points
+            pcd.colors = new_pcd.colors
+            vis.update_geometry(pcd)
+            
+            # Remove old geometries
+            for line_set in line_sets.values():
+                vis.remove_geometry(line_set, False)
+            for sphere in centroid_spheres.values():
+                vis.remove_geometry(sphere, False)
+            line_sets.clear()
+            centroid_spheres.clear()
+            
+            # Create new geometries for each object
+            for obj_data in metadata['objects']:
+                obj_id = obj_data['id']
+                color = obj_data['color']
+                trail_points = np.array(obj_data['trail'])
+                centroid = np.array(obj_data['centroid'])
+                
+                # Create trail lines
+                if len(trail_points) > 1:
+                    line_set = o3d.geometry.LineSet()
+                    line_set.points = o3d.utility.Vector3dVector(trail_points)
+                    line_set.lines = o3d.utility.Vector2iVector(
+                        [[i, i+1] for i in range(len(trail_points)-1)]
+                    )
+                    line_set.colors = o3d.utility.Vector3dVector([color] * (len(trail_points)-1))
+                    line_sets[obj_id] = line_set
+                    vis.add_geometry(line_set, False)
+                
+                # Create centroid sphere
+                sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.2)
+                sphere.translate(centroid)
+                sphere.paint_uniform_color(color)
+                centroid_spheres[obj_id] = sphere
+                vis.add_geometry(sphere, False)
+            
+            # Update view and capture image
+            vis.poll_events()
+            vis.update_renderer()
+            
+            # Save image
+            image_path = os.path.join(output_image_dir, f"frame_{frame_idx:04d}.png")
+            vis.capture_screen_image(image_path, do_render=True)
+            
+            print(f"Captured frame: {frame_idx:04d}", end='\r')
+    
+    finally:
+        vis.destroy_window()
+        print("\nCapture complete!")
+
+def load_frame_data(frame_idx, output_dir):
+    """Load point cloud data for a frame"""
+    frame_filename = f"frame_{frame_idx:04d}.ply"
+    file_path = os.path.join(output_dir, frame_filename)
+    
+    if os.path.exists(file_path):
+        pcd = o3d.io.read_point_cloud(file_path)
+        points = np.asarray(pcd.points)
+        colors = np.asarray(pcd.colors) * 255.0  # Convert back to 0-255 range
+        return points, colors
+    return None, None
 def parse_timestamps(timestamp_file):
     """
     Parse timestamps from file and return list of datetime objects
@@ -27,22 +330,27 @@ def parse_timestamps(timestamp_file):
     
     return timestamps
 
-def getImageSeq(path: str = "", seq: str = "", frame_count: int = 1):
+def getImageSeq(path: str = "", seq: str = "", frame_start: int = 1, frame_count= None):
     seq_path_list = {}
-
+    if frame_count < frame_start:
+        print("fail")
     # Get left image paths
     left_img_path = os.path.join(path, seq, "image_02", "data")
-    left_img_files = sorted(glob.glob(os.path.join(left_img_path, "*.png")))[:frame_count]
+    left_img_files = sorted(glob.glob(os.path.join(left_img_path, "*.png")))
+    if frame_count:
+        left_img_files = left_img_files[frame_start-1:frame_count]
+    else:
+        frame_count= len(left_img_files)
     seq_path_list["left"] = left_img_files
 
     # Get right image paths
     right_img_path = os.path.join(path, seq, "image_03", "data")
-    right_img_files = sorted(glob.glob(os.path.join(right_img_path, "*.png")))[:frame_count]
+    right_img_files = sorted(glob.glob(os.path.join(right_img_path, "*.png")))[frame_start-1:frame_count]
     seq_path_list["right"] = right_img_files
 
     seq_path_list["calibration"] = os.path.join(path, "calib_cam_to_cam.txt")
 
-    seq_path_list["timestamps"] = parse_timestamps(os.path.join(path, seq, "image_02","timestamps.txt"))[:frame_count]
+    seq_path_list["timestamps"] = parse_timestamps(os.path.join(path, seq, "image_02","timestamps.txt"))[frame_start-1:frame_count]
 
     return seq_path_list
 
@@ -112,21 +420,16 @@ def visualize_tracked_objects_histories(tracked_objects):
 
     plt.show()
 
-def visualize_tracking_with_pointcloud(points, colors, tracked_objects, window_name="Tracking Visualization",
-                                     view_params=None):
+def visualize_tracking_with_pointcloud(points, colors, tracked_objects, window_name="Tracking Visualization", view_params=None):
     """
-    Visualize point cloud with tracked object paths in real-time.
+    Visualize current point cloud with historical tracking trails.
     
     Args:
         points (np.ndarray): Current frame's point cloud points
         colors (np.ndarray): Current frame's point cloud colors
         tracked_objects (list): List of TrackedObject instances
         window_name (str): Name of the visualization window
-        view_params (dict): Optional view parameters with keys:
-            - 'front': Camera front direction [x, y, z]
-            - 'lookat': Point to look at [x, y, z]
-            - 'up': Up vector [x, y, z]
-            - 'zoom': Zoom factor (float)
+        view_params (dict): Optional view parameters
     """
     # Create visualization geometries list
     geometries = []
@@ -194,75 +497,88 @@ def visualize_tracking_with_pointcloud(points, colors, tracked_objects, window_n
     vis.destroy_window()
 
 if __name__ == "__main__":
-    # model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\fine_tuned_yolo.pt")
+    # Clean temp folder at start
+    clean_temp_folder()
+    
+    # Create output directory for frame data
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frame_data")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Your existing setup code
     model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\yolo11x-seg.pt")
-
     rect_folder = r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\34759_final_project_rect"
-    seq = "seq_02"
-    frame_count = 9
-
-    max_z=50.0
-
-    # classes = [0,4,8]
-    classes = [0,1,2]
-
-    seq_list = getImageSeq(path=rect_folder, seq=seq, frame_count=frame_count)
-
-    # Parameters
+    seq = "seq_01"
+    frame_start = 1
+    frame_count = 50
+    max_z = 20.0
+    classes = [0, 1, 2]
+    
+    seq_list = getImageSeq(path=rect_folder, seq=seq, frame_start= frame_start, frame_count=frame_count)
+    
+    # Tracking parameters
     cost_threshold = 10
     class_mismatch_penalty = 1000
-    max_age = 20
-
+    max_age = 10
+    
     # Main tracking loop
     tracked_objects = []
     all_tracked_objects = []
     next_object_id = 0
-    point_clouds = []
-    for frame_idx, (frame_left, frame_right, current_timestamp) in enumerate(zip(seq_list["left"],seq_list["right"],seq_list["timestamps"])):
+    frame_point_clouds = []
+    
+    for frame_idx, (frame_left, frame_right, current_timestamp) in enumerate(zip(seq_list["left"], seq_list["right"], seq_list["timestamps"])):
         print(f"\nProcessing frame {frame_idx + 1}/{len(seq_list['left'])}")
         
         calibration_file_path = seq_list["calibration"]
-        current_detections = cluster_from_stereo(model, classes, frame_left, frame_right, calibration_file_path, conf= 0.7, max_z = max_z, save_results= False, visualize = False)
-        print(f"Number of current detections: {len(current_detections)}")
-
-        # print("Measured centroids: ")
-        # [print(detection.centroid) for detection in current_detections]
-
-        # Get original pointcloud for visualization
+        
+        # Process detections
+        current_detections = process_individual_detections(
+            model=model,
+            classes=[0, 1, 2],
+            img_left_path=frame_left,
+            img_right_path=frame_right,
+            calibration_file_path=calibration_file_path,
+            conf=0.8,
+            max_z=max_z,
+            visualize=False
+        )
+        
+        # Generate and save point cloud
         point_cloud, seg_mask, labels, points_original, colors_original = generate_segmented_point_cloud(
             left_image_path=frame_left,
             right_image_path=frame_right,
             calibration_file_path=calibration_file_path,
-            seg_json_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),"temp","points.json"),
+            seg_json_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp", "points.json"),
             max_z=max_z,
             target_class_labels=None,
             save_point_cloud=False,
-            save_path="",
-            visualize=False  # Set to True if you want to visualize
+            visualize=False
         )
-        point_clouds.append(point_cloud)
-
+        
+        # Save frame data
+        save_frame_data_with_metadata(
+            points_original, 
+            colors_original, 
+            frame_idx,
+            tracked_objects, 
+            output_dir,
+        )
+        
         # Predict tracked object positions
         for obj in tracked_objects:
             obj.predict(current_timestamp)
         
         # Assign detections to tracked objects
-        previous_detections = [Detection(obj.centroid, obj.class_label) for obj in tracked_objects]
-        
         matches, unmatched_prev, unmatched_curr = assign_centroids(
-            previous_detections,
+            tracked_objects,  # Pass tracked objects directly
             current_detections,
             cost_threshold=cost_threshold,
             class_mismatch_penalty=class_mismatch_penalty
         )
         
-        print(f"Matches: {matches}")
-        print(f"Unmatched previous detections: {unmatched_prev}")
-        print(f"Unmatched current detections: {unmatched_curr}")
-        
         # Update matched tracked objects
         for prev_idx, curr_idx in matches:
-            tracked_objects[prev_idx].update(current_detections[curr_idx],current_timestamp)
+            tracked_objects[prev_idx].update(current_detections[curr_idx], current_timestamp)
         
         # Increase time_since_update for unmatched previous objects
         for idx in unmatched_prev:
@@ -278,38 +594,38 @@ if __name__ == "__main__":
         lost_objects = [obj for obj in tracked_objects if obj.time_since_update > max_age]
         tracked_objects = [obj for obj in tracked_objects if obj.time_since_update <= max_age]
         all_tracked_objects.extend(lost_objects)
-
         
-        # visualize_tracking_with_pointcloud(
-        #     pointcloud=point_clouds,
-        #     tracked_objects=tracked_objects
-        # )
-
-        # o3d.visualization.draw_geometries(point_clouds)
-        # Example: Bird's eye view
-        scaler = 4
-        view_params = {
-            'front': [0.25, -0.2, -1],  # More top-down view
-            'lookat': scaler * np.array([   -0.75  ,   0.59465    ,  6.0202]),
-            'up': [0, -1, 0],
-            'zoom': 0.225           # Even closer
-        }
-
-        # Example: Side view
-        # view_params = {
-        #     'front': [-1, 0, 0],    # Looking from positive X
-        #     'lookat': [0, 0, 0],
-        #     'up': [0, 0, 1],
-        #     'zoom': 1.0
-        # }
-
-        # Call the function with view parameters
-        visualize_tracking_with_pointcloud(points_original, colors_original, tracked_objects, 
-                                        view_params=view_params)
-    # After the loop, add remaining tracked objects
-    all_tracked_objects.extend(tracked_objects)
-
-    # Visualize after the run
-    # Visualize current frame with trajectories
+        # Visualize current state with accumulated point clouds
+        all_points = []
+        all_colors = []
+        for i in range(frame_idx + 1):
+            points, colors = load_frame_data(i, output_dir)
+            if points is not None and colors is not None:
+                all_points.append(points)
+                all_colors.append(colors)
+        
+        # if all_points and all_colors:
+        #     combined_points = np.vstack(all_points)
+        #     combined_colors = np.vstack(all_colors)
+            
+        #     # Bird's eye view parameters
+        #     scaler = 4
+        #     view_params = {
+        #         'front': [0.25, -0.2, -1],
+        #         'lookat': scaler * np.array([-0.75, 0.59465, 6.0202]),
+        #         'up': [0, -1, 0],
+        #         'zoom': 0.225
+        #     }
+            
+        #     visualize_tracking_with_pointcloud(
+        #         combined_points, 
+        #         combined_colors, 
+        #         tracked_objects,
+        #         view_params=view_params
+        #     )
     
+    # After the loop, add remaining tracked objects and save final tracking data
+    all_tracked_objects.extend(tracked_objects)
+    
+    # Final visualization
     visualize_tracked_objects_histories(all_tracked_objects)

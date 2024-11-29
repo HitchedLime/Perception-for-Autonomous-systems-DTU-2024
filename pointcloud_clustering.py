@@ -257,52 +257,48 @@ def dbscan_with_labels_and_outlier_removal(point_cloud, labels, eps=0.5, min_sam
     # print(cluster_labels)
     return np.array(centroids), np.array(cluster_labels), clustered_point_cloud, len(np.unique(inlier_cluster_ids))
 
-def visualize_point_cloud_with_centroids(
-    point_cloud, cluster_labels, centroids, centroid_labels, unique_label_colors=None
-):
+def visualize_point_cloud_with_centroids(point_cloud, detections):
     """
-    Visualize a point cloud with clusters and centroids using spheres for centroids.
+    Visualize a point cloud with detected object centroids using spheres.
 
     Args:
-        point_cloud (o3d.geometry.PointCloud): The clustered point cloud.
-        cluster_labels (np.ndarray): Cluster labels for each point.
-        centroids (np.ndarray): Centroid positions for each cluster.
-        centroid_labels (np.ndarray): Labels assigned to each centroid.
-        unique_label_colors (dict or None): Predefined colors for clusters and centroids.
+        point_cloud (o3d.geometry.PointCloud): The input point cloud
+        detections (List[Detection]): List of Detection objects containing centroids and class labels
     """
-    # Generate unique colors for each cluster if not provided
-    if unique_label_colors is None:
-        unique_labels = np.unique(cluster_labels)
-        unique_label_colors = {
-            label: np.random.rand(3) for label in unique_labels if label >= 0
-        }
-    
-    # Assign colors to each point based on its cluster label
-    points = np.asarray(point_cloud.points)
-    colors = np.array([
-        unique_label_colors[label] if label >= 0 else [0, 0, 0]  # Black for outliers
-        for label in cluster_labels
-    ])
-    point_cloud = o3d.geometry.PointCloud()
-    point_cloud.points = o3d.utility.Vector3dVector(points)
-    point_cloud.colors = o3d.utility.Vector3dVector(colors)
-
     # Create a list of geometry objects for visualization
     geometries = [point_cloud]
 
     # Add centroids as spheres
-    for i, (centroid, label) in enumerate(zip(centroids, centroid_labels)):
+    for detection in detections:
         # Create a sphere for the centroid
         sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.2)
-        sphere.translate(centroid)  # Move sphere to centroid position
-        sphere.paint_uniform_color([0, 0, 0])  # Use cluster color
+        sphere.translate(detection.centroid)  # Move sphere to centroid position
+        sphere.paint_uniform_color([0, 0, 0])  # Black color for centroids
         geometries.append(sphere)
 
-    # Visualize the point cloud and centroids
-    o3d.visualization.draw_geometries(
-        geometries,
-        window_name="Point Cloud with Centroids",
-    )
+    # Create visualizer to get view parameters
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(window_name="Point Cloud with Centroids")
+    
+    # Add geometries
+    for geometry in geometries:
+        vis.add_geometry(geometry)
+    
+    # Run visualization
+    vis.run()
+    
+    # Get and print view parameters before closing
+    view_control = vis.get_view_control()
+    cam = view_control.convert_to_pinhole_camera_parameters()
+    
+    print("\nView Parameters:")
+    print(f"Extrinsic matrix:\n{cam.extrinsic}")
+    print(f"Front vector: {-cam.extrinsic[2, :3]}")
+    print(f"Lookat point: {-cam.extrinsic[:3, 3]}")
+    print(f"Up vector: {-cam.extrinsic[1, :3]}")
+    print(f"Zoom: {view_control.get_field_of_view()}")
+    
+    vis.destroy_window()
 
 def visualize_original_pc_with_centroids(
     points, colors, cluster_labels, centroids, centroid_labels, unique_label_colors=None
@@ -435,7 +431,571 @@ def compute_min_max_coordinates_for_labels(point_cloud, cluster_labels, labels_o
             }
     return results
 
+def remove_background_with_roi(point_cloud, centroid_estimate, roi_size=(2.0, 2.0, 2.0)):
+    """
+    Remove background points using a 3D ROI around the estimated centroid.
+    
+    Args:
+        point_cloud (o3d.geometry.PointCloud): Input point cloud
+        centroid_estimate (np.ndarray): Estimated centroid from segmentation
+        roi_size (tuple): Size of ROI box (dx, dy, dz)
+    """
+    points = np.asarray(point_cloud.points)
+    
+    # Create bounds around centroid
+    min_bound = centroid_estimate - np.array(roi_size) / 2
+    max_bound = centroid_estimate + np.array(roi_size) / 2
+    
+    # Filter points within bounds
+    mask = np.all((points >= min_bound) & (points <= max_bound), axis=1)
+    
+    filtered_pcd = o3d.geometry.PointCloud()
+    filtered_pcd.points = o3d.utility.Vector3dVector(points[mask])
+    if point_cloud.has_colors():
+        filtered_pcd.colors = o3d.utility.Vector3dVector(np.asarray(point_cloud.colors)[mask])
+    
+    return filtered_pcd
+
+def remove_background_with_distance(point_cloud, centroid_estimate, max_distance=2.0):
+    """
+    Remove background points based on distance from estimated centroid.
+    
+    Args:
+        point_cloud (o3d.geometry.PointCloud): Input point cloud
+        centroid_estimate (np.ndarray): Estimated centroid from segmentation
+        max_distance (float): Maximum distance from centroid to keep points
+    """
+    points = np.asarray(point_cloud.points)
+    
+    # Calculate distances from each point to centroid
+    distances = np.linalg.norm(points - centroid_estimate, axis=1)
+    
+    # Keep points within threshold
+    mask = distances <= max_distance
+    
+    filtered_pcd = o3d.geometry.PointCloud()
+    filtered_pcd.points = o3d.utility.Vector3dVector(points[mask])
+    if point_cloud.has_colors():
+        filtered_pcd.colors = o3d.utility.Vector3dVector(np.asarray(point_cloud.colors)[mask])
+    
+    return filtered_pcd
+
+def remove_background_density_based(point_cloud, centroid_estimate, radius=1.0, min_points=10):
+    """
+    Remove background using density-based filtering around centroid.
+    
+    Args:
+        point_cloud (o3d.geometry.PointCloud): Input point cloud
+        centroid_estimate (np.ndarray): Estimated centroid from segmentation
+        radius (float): Radius for density calculation
+        min_points (int): Minimum number of points in radius to keep
+    """
+    # First, do rough distance-based filtering
+    rough_filtered = remove_background_with_distance(point_cloud, centroid_estimate, max_distance=radius*2)
+    
+    # Build KD-tree for efficient neighbor search
+    pcd_tree = o3d.geometry.KDTreeFlann(rough_filtered)
+    
+    points = np.asarray(rough_filtered.points)
+    keep_indices = []
+    
+    # For each point, check density in its neighborhood
+    for i in range(len(points)):
+        [k, idx, _] = pcd_tree.search_radius_vector_3d(points[i], radius)
+        if k >= min_points:
+            keep_indices.append(i)
+    
+    # Create filtered point cloud
+    filtered_pcd = o3d.geometry.PointCloud()
+    filtered_pcd.points = o3d.utility.Vector3dVector(points[keep_indices])
+    if rough_filtered.has_colors():
+        filtered_pcd.colors = o3d.utility.Vector3dVector(np.asarray(rough_filtered.colors)[keep_indices])
+    
+    return filtered_pcd
+
+def get_refined_centroid(point_cloud, initial_centroid, class_id):
+    """
+    Get refined centroid using multiple background removal methods.
+    
+    Args:
+        point_cloud (o3d.geometry.PointCloud): Input point cloud
+        initial_centroid (np.ndarray): Initial centroid estimate from segmentation
+        class_id (int): Class ID for adjusting parameters
+    """
+    # Adjust parameters based on class
+    if class_id == 0:  # car
+        roi_size = (4.0, 2.0, 2.0)
+        max_distance = 3.0
+    elif class_id == 2:  # person
+        roi_size = (1.0, 1.0, 2.0)
+        max_distance = 1.0
+    else:  # bike or other
+        roi_size = (2.0, 1.0, 2.0)
+        max_distance = 1.5
+
+    # Apply ROI filtering first
+    roi_filtered = remove_background_with_roi(point_cloud, initial_centroid, roi_size)
+    
+    # Then apply density-based filtering
+    density_filtered = remove_background_density_based(roi_filtered, initial_centroid)
+    
+    # Calculate final centroid
+    if len(np.asarray(density_filtered.points)) > 0:
+        final_centroid = np.mean(np.asarray(density_filtered.points), axis=0)
+    else:
+        final_centroid = initial_centroid
+    
+    return final_centroid, density_filtered
+
+def get_centroid_from_point_cloud(point_cloud, outlier_std_ratio=2.0):
+    """
+    Get centroid from point cloud after statistical outlier removal.
+    
+    Args:
+        point_cloud (o3d.geometry.PointCloud): Input point cloud
+        outlier_std_ratio (float): Standard deviation ratio for outlier removal
+        
+    Returns:
+        np.ndarray: Centroid coordinates [x, y, z]
+    """
+    # First, perform statistical outlier removal
+    cleaned_pcd, _ = point_cloud.remove_statistical_outlier(
+        nb_neighbors=20,  # Number of neighbors to analyze
+        std_ratio=outlier_std_ratio  # Standard deviation threshold
+    )
+    
+    # Convert to numpy array for k-means
+    points = np.asarray(cleaned_pcd.points)
+    
+    if len(points) == 0:
+        return None
+        
+    # Perform k-means clustering with k=1
+    from sklearn.cluster import KMeans
+    kmeans = KMeans(n_clusters=1, n_init=10)
+    kmeans.fit(points)
+    
+    # The centroid is the cluster center
+    centroid = kmeans.cluster_centers_[0]
+    
+    return centroid
+
+def get_centroid_from_point_cloud(point_cloud, outlier_std_ratio=2.0):
+    """
+    Get centroid from point cloud using DBSCAN with grid search.
+    
+    Args:
+        point_cloud (o3d.geometry.PointCloud): Input point cloud
+        outlier_std_ratio (float): Standard deviation ratio for outlier removal
+        
+    Returns:
+        np.ndarray: Centroid coordinates [x, y, z]
+    """
+    # First, perform statistical outlier removal
+    cleaned_pcd, _ = point_cloud.remove_statistical_outlier(
+        nb_neighbors=20,  # Number of neighbors to analyze
+        std_ratio=outlier_std_ratio  # Standard deviation threshold
+    )
+    
+    # Convert to numpy array for DBSCAN
+    points = np.asarray(cleaned_pcd.points)
+    
+    if len(points) == 0:
+        return None
+        
+    # Grid search parameters
+    eps_values = np.array([0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5])
+    min_samples_values = [10, 20, 30, 50, 75, 100]
+    
+    best_centroid = None
+    best_score = 0  # Number of inlier points
+    
+    # Try different parameter combinations
+    for eps in eps_values:
+        for min_samples in min_samples_values:
+            try:
+                # Perform DBSCAN clustering
+                dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+                cluster_labels = dbscan.fit_predict(points)
+                
+                # Count number of clusters (excluding noise points labeled as -1)
+                n_clusters = len(set(cluster_labels[cluster_labels >= 0]))
+                
+                # If we get exactly one cluster
+                if n_clusters == 1:
+                    # Get points from the cluster (excluding noise points)
+                    cluster_points = points[cluster_labels == 0]
+                    n_points = len(cluster_points)
+                    
+                    # If this cluster has more points than previous best
+                    if n_points > best_score:
+                        centroid = np.mean(cluster_points, axis=0)
+                        best_centroid = centroid
+                        best_score = n_points
+                        
+            except Exception as e:
+                continue
+    
+    return best_centroid
+
+def process_segmented_point_cloud(point_cloud, class_id):
+    """
+    Process a segmented point cloud to get centroid coordinates.
+    Includes visualization options for debugging.
+    
+    Args:
+        point_cloud (o3d.geometry.PointCloud): Input point cloud
+        class_id (int): Class ID of the detection
+        
+    Returns:
+        Detection: Detection object with centroid and class label, or None if processing fails
+    """
+    # Check if point cloud is empty
+    if len(np.asarray(point_cloud.points)) == 0:
+        print(f"Warning: Empty point cloud received for class {class_id}")
+        return None
+    
+    # Optional: Voxel downsampling to reduce computation time
+    voxel_size = 0.05  # Adjust based on your point cloud scale
+    downsampled_pcd = point_cloud.voxel_down_sample(voxel_size)
+    
+    # Get initial centroid
+    initial_centroid = get_centroid_from_point_cloud(downsampled_pcd)
+    
+    # If we couldn't get an initial centroid, try using mean of all points
+    if initial_centroid is None:
+        points = np.asarray(point_cloud.points)
+        if len(points) > 0:
+            initial_centroid = np.mean(points, axis=0)
+        else:
+            print(f"Warning: Could not compute centroid for class {class_id}")
+            return None
+
+    try:
+        # Try to refine the centroid
+        refined_centroid, filtered_pcd = get_refined_centroid(point_cloud, initial_centroid, class_id)
+        
+        # Verify the refined centroid
+        if refined_centroid is not None and not np.any(np.isnan(refined_centroid)):
+            return Detection(refined_centroid, class_id)
+        else:
+            # If refinement failed, fall back to initial centroid
+            print(f"Warning: Centroid refinement failed for class {class_id}, using initial centroid")
+            return Detection(initial_centroid, class_id)
+            
+    except Exception as e:
+        print(f"Error processing point cloud for class {class_id}: {str(e)}")
+        # Fall back to initial centroid if refinement fails
+        if initial_centroid is not None:
+            print("Falling back to initial centroid")
+            return Detection(initial_centroid, class_id)
+        return None
+
+def match_stereo_detections(left_det, right_detections, img_width, img_height, max_disparity=128):
+    """
+    Match a detection from left image to best corresponding detection in right image
+    with relaxed matching criteria.
+    """
+    # Parse left detection
+    left_class = int(left_det.split()[0])
+    left_points = np.array([float(x) for x in left_det.split()[1:]]).reshape(-1, 2)
+    left_points[:, 0] *= img_width
+    left_points[:, 1] *= img_height
+    left_points = left_points.astype(np.int32)
+    
+    # Create mask for left detection
+    left_mask = np.zeros((img_height, img_width), dtype=np.uint8)
+    cv2.fillPoly(left_mask, [left_points], 1)
+    
+    # Calculate vertical bounds of left detection
+    left_y_min = np.min(left_points[:, 1])
+    left_y_max = np.max(left_points[:, 1])
+    left_height = left_y_max - left_y_min
+    
+    best_match = None
+    best_disparity = None
+    best_iou = 0
+    
+    # Try each right detection of same class
+    for right_det in right_detections:
+        right_class = int(right_det.split()[0])
+        
+        # Only consider detections of same class
+        if right_class != left_class:
+            continue
+            
+        # Parse right detection
+        right_points = np.array([float(x) for x in right_det.split()[1:]]).reshape(-1, 2)
+        right_points[:, 0] *= img_width
+        right_points[:, 1] *= img_height
+        right_points = right_points.astype(np.int32)
+        
+        # Check vertical position similarity with relaxed constraints
+        right_y_min = np.min(right_points[:, 1])
+        right_y_max = np.max(right_points[:, 1])
+        right_height = right_y_max - right_y_min
+        
+        # Calculate height difference ratio
+        height_ratio = min(left_height, right_height) / max(left_height, right_height)
+        
+        # Relaxed vertical position check (40% of height instead of 20%)
+        # Relaxed height ratio check (0.5 instead of 0.7)
+        if (abs(left_y_min - right_y_min) > 0.7 * left_height or 
+            abs(left_y_max - right_y_max) > 0.7 * left_height or
+            height_ratio < 0.7):
+            continue
+        
+        # Create mask for right detection
+        right_mask = np.zeros((img_height, img_width), dtype=np.uint8)
+        cv2.fillPoly(right_mask, [right_points], 1)
+        
+        # Try different disparity values
+        for d in range(max_disparity):
+            # Shift right mask left
+            shift_matrix = np.float32([[1, 0, -d], [0, 1, 0]])
+            shifted_right_mask = cv2.warpAffine(right_mask, shift_matrix, (img_width, img_height))
+            
+            # Calculate IoU
+            intersection = cv2.bitwise_and(left_mask, shifted_right_mask)
+            union = cv2.bitwise_or(left_mask, shifted_right_mask)
+            iou = np.sum(intersection) / (np.sum(union) + 1e-6)
+            
+            if iou > best_iou:
+                best_iou = iou
+                best_match = right_det
+                best_disparity = d
+    
+    return best_match, best_disparity, best_iou
+
+def process_individual_detections_with_intersection(model, classes, img_left_path, img_right_path, calibration_file_path, conf=0.7, max_z=100.0, visualize=True):
+    """
+    Process each detection individually using intersection of left and right camera masks,
+    with improved stereo matching.
+    
+    Returns:
+        List[Detection]: List of Detection objects with centroids and class labels
+    """
+    # Get file paths and create temp directory
+    current_file_path = os.path.abspath(__file__)
+    parent_directory = os.path.dirname(current_file_path)
+    temp_directory_path = os.path.join(parent_directory, "temp")
+    os.makedirs(temp_directory_path, exist_ok=True)
+    
+    # Clear existing temp files
+    mask_left_path = os.path.join(temp_directory_path, "temp_left.txt")
+    mask_right_path = os.path.join(temp_directory_path, "temp_right.txt")
+    if os.path.exists(mask_left_path):
+        open(mask_left_path, 'w').close()
+    if os.path.exists(mask_right_path):
+        open(mask_right_path, 'w').close()
+    
+    # Get detections from both images
+    results_left = model.predict(source=img_left_path, classes=classes, conf=conf)
+    results_right = model.predict(source=img_right_path, classes=classes, conf=conf)
+    
+    # Save detection results
+    results_left[0].save_txt(mask_left_path)
+    results_right[0].save_txt(mask_right_path)
+    
+    # Read detections
+    with open(mask_left_path, 'r') as f:
+        left_detections = f.readlines()
+    with open(mask_right_path, 'r') as f:
+        right_detections = f.readlines()
+    
+    detections = []
+    image = cv2.imread(img_left_path)
+    height, width = image.shape[:2]
+    
+    # Process each detection from left image
+    for i, left_det in enumerate(left_detections):
+        # Create temporary files for single detection
+        single_mask_path = os.path.join(temp_directory_path, f"temp_{i}.txt")
+        output_json = os.path.join(temp_directory_path, f"points_{i}.json")
+        
+        # Flush existing files
+        if os.path.exists(single_mask_path):
+            open(single_mask_path, 'w').close()
+        if os.path.exists(output_json):
+            open(output_json, 'w').close()
+            
+        # Find matching detection in right image
+        right_match, disparity, iou = match_stereo_detections(
+            left_det, right_detections, width, height, max_disparity=128
+        )
+        
+        # Only process if we found a good match
+        if right_match is not None and iou > 0.1:  # Adjust threshold as needed
+            # Get class label from detection
+            class_id = int(left_det.split()[0])
+            
+            # Parse left detection points
+            left_points = np.array([float(x) for x in left_det.split()[1:]]).reshape(-1, 2)
+            left_points[:, 0] *= width
+            left_points[:, 1] *= height
+            left_points = left_points.astype(np.int32)
+            
+            # Create mask for left detection
+            left_mask = np.zeros((height, width), dtype=np.uint8)
+            cv2.fillPoly(left_mask, [left_points], 1)
+            
+            # Parse right detection points and create mask
+            right_points = np.array([float(x) for x in right_match.split()[1:]]).reshape(-1, 2)
+            right_points[:, 0] *= width
+            right_points[:, 1] *= height
+            right_points = right_points.astype(np.int32)
+            
+            # Create mask for right detection
+            right_mask = np.zeros((height, width), dtype=np.uint8)
+            cv2.fillPoly(right_mask, [right_points], 1)
+            
+            # Shift right mask by found disparity
+            shift_matrix = np.float32([[1, 0, -disparity], [0, 1, 0]])
+            shifted_right_mask = cv2.warpAffine(right_mask, shift_matrix, (width, height))
+            
+            # Calculate intersection
+            intersection = cv2.bitwise_and(left_mask, shifted_right_mask)
+            
+            # Convert intersection mask to polygon points
+            contours, _ = cv2.findContours(intersection, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                largest_contour = max(contours, key=cv2.contourArea)
+                epsilon = 0.005 * cv2.arcLength(largest_contour, True)
+                approx = cv2.approxPolyDP(largest_contour, epsilon, True)
+                
+                # Save intersection polygon to file
+                with open(single_mask_path, 'w') as f:
+                    points_str = " ".join([f"{pt[0][0]/width} {pt[0][1]/height}" for pt in approx])
+                    f.write(f"{class_id} {points_str}\n")
+                
+                points_with_labels = get_polygon_points(image, single_mask_path, output_json)
+                
+                # Generate point cloud for intersection
+                point_cloud, seg_mask, labels, points_original, colors_original = generate_segmented_point_cloud(
+                    left_image_path=img_left_path,
+                    right_image_path=img_right_path,
+                    calibration_file_path=calibration_file_path,
+                    seg_json_path=output_json,
+                    max_z=max_z,
+                    target_class_labels=[class_id],
+                    save_point_cloud=False,
+                    visualize=False
+                )
+                
+                detection = process_segmented_point_cloud(point_cloud, class_id)
+                
+                if detection is not None:
+                    detections.append(detection)
+                    if visualize:
+                        print(f"Detection {i}: Class {class_id}, Disparity: {disparity} pixels, IoU: {iou:.3f}")
+                        visualize_point_cloud_with_centroids(point_cloud, detections)
+    
+    return detections
+
 from tracking import Detection
+def process_individual_detections(model, classes, img_left_path, img_right_path, calibration_file_path, conf=0.7, max_z=100.0, visualize = True):
+    """
+    Process each detection individually to get more accurate centroids and track objects across frames.
+    
+    Returns:
+        List[Detection]: List of Detection objects with centroids and class labels
+    """
+    # Get file paths and create temp directory
+    current_file_path = os.path.abspath(__file__)
+    parent_directory = os.path.dirname(current_file_path)
+    temp_directory_path = os.path.join(parent_directory, "temp")
+    os.makedirs(temp_directory_path, exist_ok=True)
+    
+    # Clear existing temp files
+    mask_path = os.path.join(temp_directory_path, "temp.txt")
+    if os.path.exists(mask_path):
+        # Flush the main mask file
+        open(mask_path, 'w').close()
+    
+    # Get detections from both images
+    results1 = model.predict(source=img_left_path, classes=classes, conf=conf)
+    results1[0].show()
+    # results2 = model.predict(source=img_right_path, classes=classes, conf=conf)
+    
+    # Use results with more detections
+    # results = results1 if len(results1[0].boxes) >= len(results2[0].boxes) else results2
+    results = results1
+    # Save all detections to the mask file
+    results[0].save_txt(mask_path)
+
+    output_json = os.path.join(temp_directory_path,"points.json")
+    
+    
+    detections = []
+    image = cv2.imread(img_left_path)
+    points_with_labels = get_polygon_points(image, mask_path, output_json)
+    
+    # Read all detections from the mask file
+    with open(mask_path, 'r') as f:
+        mask_lines = f.readlines()
+    
+    # Process each detection individually
+    for i, line in enumerate(mask_lines):
+        # Create temporary mask file with single detection
+        single_mask_path = os.path.join(temp_directory_path, f"temp_{i}.txt")
+        # Flush existing single mask file if it exists
+        if os.path.exists(single_mask_path):
+            open(single_mask_path, 'w').close()
+            
+        # Write new detection data
+        with open(single_mask_path, 'w') as f:
+            f.write(line)
+        
+        # Generate JSON for single detection
+        output_json = os.path.join(temp_directory_path, f"points_{i}.json")
+        # Flush existing JSON file if it exists
+        if os.path.exists(output_json):
+            open(output_json, 'w').close()
+            
+        points_with_labels = get_polygon_points(image, single_mask_path, output_json)
+        
+        # Get class label from the line (first number in the line)
+        class_id = int(line.split()[0])
+        
+        # Generate point cloud for single detection
+        point_cloud, seg_mask, labels, points_original, colors_original = generate_segmented_point_cloud(
+            left_image_path=img_left_path,
+            right_image_path=img_right_path,
+            calibration_file_path=calibration_file_path,
+            seg_json_path=output_json,
+            max_z=max_z,
+            target_class_labels=[class_id],
+            save_point_cloud=False,
+            visualize=False
+        )
+        detection = process_segmented_point_cloud(point_cloud, class_id)
+        
+        
+        # If we found a valid centroid, create a Detection object
+        if detection is not None:
+            detections.append(detection)
+
+        if visualize:
+            # Visualize the clustered point cloud with centroids and labels
+            visualize_point_cloud_with_centroids(point_cloud, detections)
+            # points = np.asarray(point_cloud.points)
+            # visualize_original_pc_with_centroids(
+            #     points=points_original,
+            #     cluster_labels=labels,
+            #     centroids=best_centroids,
+            #     centroid_labels=best_cluster_labels,
+            #     colors=colors_original
+            # )
+    if visualize:
+        visualize_original_pc_with_centroids(
+            points=points_original,
+            cluster_labels=labels,
+            centroids=[detection.centroid for detection in detections],
+            centroid_labels=[detection.class_label for detection in detections],
+            colors=colors_original
+        )
+        
+    return detections
 
 def cluster_from_stereo(model, classes, img_left_path, img_right_path, calibration_file_path, conf= 0.7, max_z: float=100.0, save_results= False, visualize = False):
     """
@@ -582,12 +1142,38 @@ def cluster_from_stereo(model, classes, img_left_path, img_right_path, calibrati
 
 if __name__=="__main__":
     # Load the model
-    model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\yolo11x-seg.pt")
+    model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\best.pt")
 
     # Test image
-    img_left = r'..\34759_final_project_rect\seq_02\image_02\data\0000000001.png'
-    img_right = r'..\34759_final_project_rect\seq_02\image_03\data\0000000001.png'
+    img_left = r'..\34759_final_project_rect\seq_02\image_02\data\0000000004.png'
+    img_right = r'..\34759_final_project_rect\seq_02\image_03\data\0000000004.png'
     calibration_file_path = r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\34759_final_project_rect\calib_cam_to_cam.txt"
 
-    max_z = 100.0
-    detections = cluster_from_stereo(model=model, classes = [0,1,2], img_left_path=img_left, img_right_path=img_right, calibration_file_path=calibration_file_path, conf=0.7,max_z=max_z, save_results=True, visualize = True)
+    max_z = 30.0
+
+    frame_detections = process_individual_detections(
+            model=model,
+            classes=[0,1,2],
+            img_left_path=img_left,
+            img_right_path=img_right,
+            calibration_file_path=calibration_file_path,
+            conf=0.7,
+            max_z=max_z,
+            visualize=True
+        )
+    
+    
+    
+    print(len(frame_detections))
+    # detections = cluster_from_stereo(model=model, classes = [0,1,2], img_left_path=img_left, img_right_path=img_right, calibration_file_path=calibration_file_path, conf=0.7,max_z=max_z, save_results=True, visualize = True)
+
+    # View Parameters:
+    # Extrinsic matrix:
+    # [[    0.96548    -0.17072     0.19672    -0.83989]
+    # [     0.2254      0.9261    -0.30253      2.7364]
+    # [   -0.13053     0.33643     0.93262      2.3552]
+    # [          0           0           0           1]]
+    # Front vector: [    0.13053    -0.33643    -0.93262]
+    # Lookat point: [    0.83989     -2.7364     -2.3552]
+    # Up vector: [    -0.2254     -0.9261     0.30253]
+    # Zoom: 60.0
