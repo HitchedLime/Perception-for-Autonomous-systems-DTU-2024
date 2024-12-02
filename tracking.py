@@ -30,6 +30,7 @@ class TrackedObject:
         self.max_predicted_distance = 0.5
         self.confidence = 1.0
         self.last_reliable_centroid = detection.centroid.copy()
+        self.last_reliable_bbox = detection.bbox.copy()
 
     def predict(self, current_timestamp):
         if self.last_timestamp is None:
@@ -53,11 +54,14 @@ class TrackedObject:
         
         if distance <= max_allowed_distance:
             self.centroid = self.filter.update(detection.centroid)
+            self.bbox = detection.bbox
             self.last_reliable_centroid = self.centroid.copy()
+            self.last_reliable_bbox = self.bbox.copy()
             self.confidence = 1.0
         else:
             self.filter.update(self.last_reliable_centroid)
             self.centroid = self.last_reliable_centroid
+            self.bbox = self.last_reliable_bbox
         
         self.history.append(self.centroid.copy())
         self.time_since_update = 0

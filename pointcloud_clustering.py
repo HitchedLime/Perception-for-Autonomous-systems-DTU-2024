@@ -273,7 +273,7 @@ def visualize_point_cloud_with_centroids(point_cloud, detections):
         # Create a sphere for the centroid
         sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.2)
         sphere.translate(detection.centroid)  # Move sphere to centroid position
-        sphere.paint_uniform_color([0, 0, 0])  # Black color for centroids
+        sphere.paint_uniform_color([200, 0, 200])  # Black color for centroids
         geometries.append(sphere)
 
     # Create visualizer to get view parameters
@@ -341,7 +341,7 @@ def visualize_original_pc_with_centroids(
         sphere.translate(centroid)  # Move the sphere to the centroid position
 
         # Use the cluster color or a default color if unavailable
-        sphere_color = unique_label_colors.get(label, [0, 0, 0])
+        sphere_color = [200,0,200]
         sphere.paint_uniform_color(sphere_color)
         geometries.append(sphere)
 
@@ -916,12 +916,13 @@ def process_individual_detections(model, classes, img_left_path, img_right_path,
     results1 = model.predict(source=img_left_path, classes=classes, conf=conf)
     # results1[0].show()
     # print(results1[0].boxes.xyxy.numpy())
-    bbox = results1[0].boxes.xyxy.numpy()
+    
     # results2 = model.predict(source=img_right_path, classes=classes, conf=conf)
     
     # Use results with more detections
     # results = results1 if len(results1[0].boxes) >= len(results2[0].boxes) else results2
     results = results1
+    bbox = results[0].boxes.xyxy.numpy()
     # Save all detections to the mask file
     results[0].save_txt(mask_path)
 
@@ -979,7 +980,7 @@ def process_individual_detections(model, classes, img_left_path, img_right_path,
 
         if visualize:
             # Visualize the clustered point cloud with centroids and labels
-            visualize_point_cloud_with_centroids(point_cloud, detections)
+            visualize_point_cloud_with_centroids(point_cloud, [detection])
             # points = np.asarray(point_cloud.points)
             # visualize_original_pc_with_centroids(
             #     points=points_original,
@@ -1147,13 +1148,13 @@ if __name__=="__main__":
     model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\best.pt")
 
     # Test image
-    img_left = r'..\34759_final_project_rect\seq_02\image_02\data\0000000004.png'
-    img_right = r'..\34759_final_project_rect\seq_02\image_03\data\0000000004.png'
+    img_left = r'..\34759_final_project_rect\seq_01\image_02\data\000006.png'
+    img_right = r'..\34759_final_project_rect\seq_01\image_03\data\000006.png'
     calibration_file_path = r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\34759_final_project_rect\calib_cam_to_cam.txt"
 
     max_z = 30.0
 
-    frame_detections,bbox = process_individual_detections(
+    frame_detections = process_individual_detections(
             model=model,
             classes=[0,1,2],
             img_left_path=img_left,

@@ -63,7 +63,8 @@ def save_frame_data_with_metadata(points, colors, frame_idx, tracked_objects, ou
             'class_label': obj.class_label,
             'color': class_colors.get(obj.class_label, [0.5, 0.5, 0.5]),
             'centroid': obj.centroid.tolist(),
-            'trail': [point.tolist() for point in obj.history]
+            'trail': [point.tolist() for point in obj.history],
+            'bbox': obj.bbox.tolist()
         }
         metadata['objects'].append(object_data)
     
@@ -332,8 +333,8 @@ def parse_timestamps(timestamp_file):
 
 def getImageSeq(path: str = "", seq: str = "", frame_start: int = 1, frame_count= None):
     seq_path_list = {}
-    if frame_count < frame_start:
-        print("fail")
+    # if frame_count < frame_start:
+    #     print("fail")
     # Get left image paths
     left_img_path = os.path.join(path, seq, "image_02", "data")
     left_img_files = sorted(glob.glob(os.path.join(left_img_path, "*.png")))
@@ -624,6 +625,7 @@ def plot_separate_metrics(frame_ious, frame_rmse):
     plt.tight_layout()
     plt.show()
 
+
 def evaluate_predictions(predictions, ground_truth_file):
     from labelextract import parse_label_file, filter_and_extract_locations
     import numpy as np
@@ -633,7 +635,7 @@ def evaluate_predictions(predictions, ground_truth_file):
     pred_rmses = []
     max_frame = max([det["frame"] for det in gt_data])
     
-    for frame in range(max_frame + 1):
+    for frame in range(max_frame):
         gt_locations, gt_boxes = filter_and_extract_locations(gt_data, frame=frame)
         
         if frame >= len(predictions) or not predictions[frame]:
@@ -665,7 +667,7 @@ def evaluate_predictions(predictions, ground_truth_file):
 
     return pred_ious, pred_rmses
 
-def plot_metrics(pred_ious, pred_rmses):
+def plot_metrics(pred_ious, pred_rmses, output_dir):
     import matplotlib.pyplot as plt
     
     plt.figure(figsize=(15, 5))
@@ -703,23 +705,38 @@ def plot_metrics(pred_ious, pred_rmses):
     plt.grid(True)
     
     plt.tight_layout()
-    plt.show()
+    
+    # Save the plot to the output directory
+    os.makedirs(output_dir, exist_ok=True)
+    plot_path = os.path.join(output_dir, "metrics_plot.png")
+    plt.savefig(plot_path)
+    print(f"Metrics plot saved to: {plot_path}")
+
+    # Save the IoU and RMSE values to a JSON file
+    metrics_data = {
+        "ious": pred_ious,
+        "rmses": pred_rmses
+    }
+    metrics_path = os.path.join(output_dir, "metrics.json")
+    with open(metrics_path, "w") as f:
+        json.dump(metrics_data, f)
+    print(f"Metrics data saved to: {metrics_path}")
 
 if __name__ == "__main__":
     # Clean temp folder at start
     clean_temp_folder()
     
     # Create output directory for frame data
-    output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frame_data")
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "seq_01")
     os.makedirs(output_dir, exist_ok=True)
     
     # Your existing setup code
     model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\best.pt")
     rect_folder = r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\34759_final_project_rect"
     seq = "seq_01"
-    frame_start = 1
-    frame_count = 6
-    max_z = 30.0
+    frame_start = 96
+    frame_count = 98
+    max_z = 50.0
     classes = [0, 1, 2]
     
     seq_list = getImageSeq(path=rect_folder, seq=seq, frame_start= frame_start, frame_count=frame_count)
@@ -727,7 +744,7 @@ if __name__ == "__main__":
     # Tracking parameters
     cost_threshold = 15
     class_mismatch_penalty = 1000
-    max_age = 25
+    max_age = 30
     
     # Main tracking loop
     tracked_objects = []
@@ -749,7 +766,7 @@ if __name__ == "__main__":
             img_left_path=frame_left,
             img_right_path=frame_right,
             calibration_file_path=calibration_file_path,
-            conf=0.7,
+            conf=0.8,
             max_z=max_z,
             visualize=False
         )
@@ -817,33 +834,8 @@ if __name__ == "__main__":
                 all_points.append(points)
                 all_colors.append(colors)
         
-        # In main loop:
-        tracked_objects_by_frame.append(tracked_objects.copy())
-        # if all_points and all_colors:
-        #     combined_points = np.vstack(all_points)
-        #     combined_colors = np.vstack(all_colors)
-            
-        #     # Bird's eye view parameters
-        #     scaler = 4
-        #     view_params = {
-        #         'front': [0.25, -0.2, -1],
-        #         'lookat': scaler * np.array([-0.75, 0.59465, 6.0202]),
-        #         'up': [0, -1, 0],
-        #         'zoom': 0.225
-        #     }
-            
-        #     visualize_tracking_with_pointcloud(
-        #         combined_points, 
-        #         combined_colors, 
-        #         tracked_objects,
-        #         view_params=view_params
-        #     )
-    
     # After the loop, add remaining tracked objects and save final tracking data
     all_tracked_objects.extend(tracked_objects)
     
     # Final visualization
     visualize_tracked_objects_histories(all_tracked_objects)
-    ground_truth_file = os.path.join(rect_folder, seq, "labels.txt")
-    pred_ious, pred_rmses = evaluate_predictions(tracked_objects_by_frame, ground_truth_file)
-    plot_metrics(pred_ious, pred_rmses)
