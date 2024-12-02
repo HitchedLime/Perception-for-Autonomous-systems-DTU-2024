@@ -496,6 +496,215 @@ def visualize_tracking_with_pointcloud(points, colors, tracked_objects, window_n
     vis.run()
     vis.destroy_window()
 
+def calculate_iou(box1, box2):
+    """Calculate IoU between two bounding boxes [x1, y1, x2, y2]"""
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+    
+    intersection = max(0, x2 - x1) * max(0, y2 - y1)
+    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    
+    union = box1_area + box2_area - intersection
+    return intersection / union if union > 0 else 0
+
+def match_detections(pred_centroids, gt_centroids, pred_boxes, gt_boxes, threshold=0.5):
+    """
+    Match predictions to ground truth using Hungarian algorithm
+    
+    Args:
+        pred_centroids: Nx3 array of predicted 3D centroids
+        gt_centroids: Mx3 array of ground truth 3D centroids
+        pred_boxes: Nx4 array of predicted 2D boxes [x1,y1,x2,y2]
+        gt_boxes: Mx4 array of ground truth 2D boxes
+        threshold: IoU threshold for valid matches
+    
+    Returns:
+        matches: List of (pred_idx, gt_idx) tuples
+        unmatched_pred: List of unmatched prediction indices
+        unmatched_gt: List of unmatched ground truth indices
+    """
+    if len(pred_centroids) == 0 or len(gt_centroids) == 0:
+        return [], list(range(len(pred_centroids))), list(range(len(gt_centroids)))
+    
+    # Calculate cost matrix using centroid distances and box IoUs
+    cost_matrix = np.zeros((len(pred_centroids), len(gt_centroids)))
+    for i, pred_box in enumerate(pred_boxes):
+        for j, gt_box in enumerate(gt_boxes):
+            iou = calculate_iou(pred_box, gt_box)
+            if iou > threshold:
+                # Use negative distance as cost (higher IoU = lower cost)
+                dist = np.linalg.norm(pred_centroids[i] - gt_centroids[j])
+                cost_matrix[i,j] = dist
+            else:
+                cost_matrix[i,j] = float('inf')
+    
+    # Use Hungarian algorithm for optimal matching
+    from scipy.optimize import linear_sum_assignment
+    pred_indices, gt_indices = linear_sum_assignment(cost_matrix)
+    
+    # Filter out invalid matches (infinite cost)
+    valid_matches = [(pred_idx, gt_idx) for pred_idx, gt_idx in zip(pred_indices, gt_indices) 
+                    if cost_matrix[pred_idx, gt_idx] != float('inf')]
+    
+    matched_pred = {idx for idx, _ in valid_matches}
+    matched_gt = {idx for _, idx in valid_matches}
+    
+    unmatched_pred = [idx for idx in range(len(pred_centroids)) if idx not in matched_pred]
+    unmatched_gt = [idx for idx in range(len(gt_centroids)) if idx not in matched_gt]
+    
+    return valid_matches, unmatched_pred, unmatched_gt
+
+def evaluate_boxes_and_centroids(predictions, ground_truth_file):
+    """Evaluates boxes and centroids separately against ground truth"""
+    from labelextract import parse_label_file, filter_and_extract_locations
+    import numpy as np
+    
+    gt_data = parse_label_file(ground_truth_file)
+    frame_ious = []
+    frame_rmse = []
+    max_frame = max([det["frame"] for det in gt_data])
+    
+    for frame in range(max_frame + 1):
+        # Get ground truth
+        gt_locations, gt_boxes = filter_and_extract_locations(gt_data, frame=frame)
+        
+        if frame >= len(predictions):
+            frame_ious.append(0)
+            frame_rmse.append(float('inf'))
+            continue
+            
+        frame_preds = predictions[frame]
+        if not frame_preds:
+            frame_ious.append(0)
+            frame_rmse.append(float('inf'))
+            continue
+
+        pred_centroids = np.array([det.centroid for det in frame_preds])
+        pred_boxes = np.array([det.bbox for det in frame_preds])
+
+        # Evaluate boxes
+        best_ious = []
+        for pred_box in pred_boxes:
+            ious = [calculate_iou(pred_box, gt_box) for gt_box in gt_boxes]
+            best_ious.append(max(ious) if ious else 0)
+        frame_ious.append(np.mean(best_ious) if best_ious else 0)
+
+        # Evaluate centroids
+        min_distances = []
+        for pred_centroid in pred_centroids:
+            distances = [np.linalg.norm(pred_centroid - gt_centroid) for gt_centroid in gt_locations]
+            min_distances.append(min(distances) if distances else float('inf'))
+        frame_rmse.append(np.sqrt(np.mean(np.square(min_distances))) if min_distances else float('inf'))
+
+    return frame_ious, frame_rmse
+
+def plot_separate_metrics(frame_ious, frame_rmse):
+    """Creates separate plots for IoU and RMSE metrics"""
+    import matplotlib.pyplot as plt
+    
+    plt.figure(figsize=(12, 5))
+    
+    plt.subplot(1, 2, 1)
+    plt.plot(frame_ious, 'b-')
+    plt.xlabel('Frame')
+    plt.ylabel('Best IoU')
+    plt.title('Bounding Box IoU per Frame')
+    plt.grid(True)
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(frame_rmse, 'r-')
+    plt.xlabel('Frame')
+    plt.ylabel('RMSE (meters)')
+    plt.title('Centroid RMSE per Frame')
+    plt.grid(True)
+    
+    plt.tight_layout()
+    plt.show()
+
+def evaluate_predictions(predictions, ground_truth_file):
+    from labelextract import parse_label_file, filter_and_extract_locations
+    import numpy as np
+    
+    gt_data = parse_label_file(ground_truth_file)
+    pred_ious = []
+    pred_rmses = []
+    max_frame = max([det["frame"] for det in gt_data])
+    
+    for frame in range(max_frame + 1):
+        gt_locations, gt_boxes = filter_and_extract_locations(gt_data, frame=frame)
+        
+        if frame >= len(predictions) or not predictions[frame]:
+            continue
+            
+        frame_preds = predictions[frame]
+        pred_boxes = np.array([det.bbox for det in frame_preds])
+        pred_centroids = np.array([det.centroid for det in frame_preds])
+        
+        frame_ious = []
+        frame_rmses = []
+        
+        for pred_idx, (pred_box, pred_centroid) in enumerate(zip(pred_boxes, pred_centroids)):
+            # Get IoUs and find best match
+            ious = [calculate_iou(pred_box, gt_box) for gt_box in gt_boxes]
+            best_iou = max(ious) if ious else 0
+            
+            # Only calculate RMSE if IoU > 0
+            if best_iou > 0:
+                frame_ious.append(best_iou)
+                # Get best matching ground truth index
+                best_gt_idx = np.argmax(ious)
+                # Calculate RMSE with corresponding ground truth centroid
+                rmse = np.linalg.norm(pred_centroid - gt_locations[best_gt_idx])
+                frame_rmses.append(rmse)
+            
+        pred_ious.append(frame_ious)
+        pred_rmses.append(frame_rmses)
+
+    return pred_ious, pred_rmses
+
+def plot_metrics(pred_ious, pred_rmses):
+    import matplotlib.pyplot as plt
+    
+    plt.figure(figsize=(15, 5))
+    
+    # Plot IoUs
+    plt.subplot(1, 2, 1)
+    for i in range(max(len(ious) for ious in pred_ious)):
+        values = [ious[i] if i < len(ious) else None for ious in pred_ious]
+        frames = range(len(pred_ious))
+        valid_idx = [idx for idx, val in enumerate(values) if val is not None]
+        valid_values = [values[idx] for idx in valid_idx]
+        if valid_values:  # Only plot if there are valid values
+            plt.plot(valid_idx, valid_values, label=f'Prediction {i+1}')
+    
+    plt.xlabel('Frame')
+    plt.ylabel('IoU')
+    plt.title('IoU per Prediction over Time')
+    plt.legend()
+    plt.grid(True)
+    
+    # Plot RMSEs
+    plt.subplot(1, 2, 2)
+    for i in range(max(len(rmses) for rmses in pred_rmses)):
+        values = [rmses[i] if i < len(rmses) else None for rmses in pred_rmses]
+        frames = range(len(pred_rmses))
+        valid_idx = [idx for idx, val in enumerate(values) if val is not None]
+        valid_values = [values[idx] for idx in valid_idx]
+        if valid_values:  # Only plot if there are valid values
+            plt.plot(valid_idx, valid_values, label=f'Prediction {i+1}')
+    
+    plt.xlabel('Frame')
+    plt.ylabel('RMSE (meters)')
+    plt.title('RMSE per Prediction over Time')
+    plt.legend()
+    plt.grid(True)
+    
+    plt.tight_layout()
+    plt.show()
+
 if __name__ == "__main__":
     # Clean temp folder at start
     clean_temp_folder()
@@ -505,26 +714,28 @@ if __name__ == "__main__":
     os.makedirs(output_dir, exist_ok=True)
     
     # Your existing setup code
-    model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\yolo11x-seg.pt")
+    model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\best.pt")
     rect_folder = r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\34759_final_project_rect"
     seq = "seq_01"
     frame_start = 1
-    frame_count = 50
-    max_z = 20.0
+    frame_count = 6
+    max_z = 30.0
     classes = [0, 1, 2]
     
     seq_list = getImageSeq(path=rect_folder, seq=seq, frame_start= frame_start, frame_count=frame_count)
     
     # Tracking parameters
-    cost_threshold = 10
+    cost_threshold = 15
     class_mismatch_penalty = 1000
-    max_age = 10
+    max_age = 25
     
     # Main tracking loop
     tracked_objects = []
     all_tracked_objects = []
     next_object_id = 0
     frame_point_clouds = []
+    
+    tracked_objects_by_frame = []
     
     for frame_idx, (frame_left, frame_right, current_timestamp) in enumerate(zip(seq_list["left"], seq_list["right"], seq_list["timestamps"])):
         print(f"\nProcessing frame {frame_idx + 1}/{len(seq_list['left'])}")
@@ -538,10 +749,12 @@ if __name__ == "__main__":
             img_left_path=frame_left,
             img_right_path=frame_right,
             calibration_file_path=calibration_file_path,
-            conf=0.8,
+            conf=0.7,
             max_z=max_z,
             visualize=False
         )
+
+
         
         # Generate and save point cloud
         point_cloud, seg_mask, labels, points_original, colors_original = generate_segmented_point_cloud(
@@ -604,6 +817,8 @@ if __name__ == "__main__":
                 all_points.append(points)
                 all_colors.append(colors)
         
+        # In main loop:
+        tracked_objects_by_frame.append(tracked_objects.copy())
         # if all_points and all_colors:
         #     combined_points = np.vstack(all_points)
         #     combined_colors = np.vstack(all_colors)
@@ -629,3 +844,6 @@ if __name__ == "__main__":
     
     # Final visualization
     visualize_tracked_objects_histories(all_tracked_objects)
+    ground_truth_file = os.path.join(rect_folder, seq, "labels.txt")
+    pred_ious, pred_rmses = evaluate_predictions(tracked_objects_by_frame, ground_truth_file)
+    plot_metrics(pred_ious, pred_rmses)

@@ -76,5 +76,7 @@ def filter_and_extract_locations(detections, frame=None, track_id=None, obj_type
     
     # Extract locations
     locations = np.array([list(det["location"].values()) for det in filtered_detections])
+
+    bbox = np.array([list(det["bbox"].values()) for det in filtered_detections])
     
-    return locations
+    return locations,bbox

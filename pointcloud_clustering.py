@@ -638,7 +638,7 @@ def get_centroid_from_point_cloud(point_cloud, outlier_std_ratio=2.0):
     
     return best_centroid
 
-def process_segmented_point_cloud(point_cloud, class_id):
+def process_segmented_point_cloud(point_cloud, class_id, bbox):
     """
     Process a segmented point cloud to get centroid coordinates.
     Includes visualization options for debugging.
@@ -677,18 +677,18 @@ def process_segmented_point_cloud(point_cloud, class_id):
         
         # Verify the refined centroid
         if refined_centroid is not None and not np.any(np.isnan(refined_centroid)):
-            return Detection(refined_centroid, class_id)
+            return Detection(refined_centroid, class_id,bbox)
         else:
             # If refinement failed, fall back to initial centroid
             print(f"Warning: Centroid refinement failed for class {class_id}, using initial centroid")
-            return Detection(initial_centroid, class_id)
+            return Detection(initial_centroid, class_id,bbox)
             
     except Exception as e:
         print(f"Error processing point cloud for class {class_id}: {str(e)}")
         # Fall back to initial centroid if refinement fails
         if initial_centroid is not None:
             print("Falling back to initial centroid")
-            return Detection(initial_centroid, class_id)
+            return Detection(initial_centroid, class_id,bbox)
         return None
 
 def match_stereo_detections(left_det, right_detections, img_width, img_height, max_disparity=128):
@@ -914,7 +914,9 @@ def process_individual_detections(model, classes, img_left_path, img_right_path,
     
     # Get detections from both images
     results1 = model.predict(source=img_left_path, classes=classes, conf=conf)
-    results1[0].show()
+    # results1[0].show()
+    # print(results1[0].boxes.xyxy.numpy())
+    bbox = results1[0].boxes.xyxy.numpy()
     # results2 = model.predict(source=img_right_path, classes=classes, conf=conf)
     
     # Use results with more detections
@@ -968,7 +970,7 @@ def process_individual_detections(model, classes, img_left_path, img_right_path,
             save_point_cloud=False,
             visualize=False
         )
-        detection = process_segmented_point_cloud(point_cloud, class_id)
+        detection = process_segmented_point_cloud(point_cloud, class_id, bbox[i,...])
         
         
         # If we found a valid centroid, create a Detection object
@@ -1139,7 +1141,7 @@ def cluster_from_stereo(model, classes, img_left_path, img_right_path, calibrati
 
     return detections
 
-
+from main import *
 if __name__=="__main__":
     # Load the model
     model = YOLO(r"C:\Users\szakt\Desktop\DTU\Perception\FinalProject\best.pt")
@@ -1151,7 +1153,7 @@ if __name__=="__main__":
 
     max_z = 30.0
 
-    frame_detections = process_individual_detections(
+    frame_detections,bbox = process_individual_detections(
             model=model,
             classes=[0,1,2],
             img_left_path=img_left,
@@ -1161,6 +1163,8 @@ if __name__=="__main__":
             max_z=max_z,
             visualize=True
         )
+    
+    # evaluate_sequence(predictions, "ground_truth.txt")
     
     
     
